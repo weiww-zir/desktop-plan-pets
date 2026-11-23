@@ -1,0 +1,6 @@
+/work/
+*.pdb
+*.exe
+!/outputs/小黑手帐.exe
+planner.xml
+planner.xml.*
