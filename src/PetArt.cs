@@ -7,7 +7,7 @@ using System.Windows.Shapes;
 
 namespace Xiaohei
 {
-    internal enum PetPose { Rest, Tilt, Wave, Hop, Nap, Stretch, Meow, TailKittens, SpiritOrbit }
+    internal enum PetPose { Rest, Tilt, Wave, Hop, Nap, Stretch, Meow, TailKittens, SpiritOrbit, Typing }
 
     internal static partial class PetArt
     {
@@ -62,7 +62,7 @@ namespace Xiaohei
         }
 
         // Coordinates are shared by all poses so the paws stay planted when the face changes.
-        internal static FrameworkElement Draw(bool animate, PetPose pose, FrameworkElement earAnchor = null)
+        internal static FrameworkElement Draw(bool animate, PetPose pose, FrameworkElement earAnchor = null, TypingKeyboard typing = null)
         {
             var frame = new Canvas { Width = 480, Height = 455 };
             var view = new Viewbox { Stretch = Stretch.Uniform, Child = frame };
@@ -123,10 +123,15 @@ namespace Xiaohei
 
             // Rounded brush-shaped contours keep each paw legible at tray-icon sizes.
             cat = body;
-            Shape(cat, "M 319,410 C 320,405 325,407 325,414 C 326,436 328,454 339,471 L 325,470 C 317,455 313,431 319,410 Z", Outline, 0);
-            Shape(cat, "M 359,418 C 363,410 368,415 370,425 L 381,474 L 367,478 C 369,455 355,430 359,418 Z", Outline, 0);
-            Shape(cat, "M 386,416 C 389,408 394,409 395,420 C 397,442 393,457 391,478 L 378,479 C 384,459 382,434 386,416 Z", Outline, 0);
-            Shape(cat, "M 425,410 C 426,403 432,404 435,416 C 442,443 437,462 429,474 L 414,477 C 425,461 428,434 425,410 Z", Outline, 0);
+            if (pose == PetPose.Typing)
+                cat.Children.Add(typing ?? new TypingKeyboard(motion));
+            else
+            {
+                Shape(cat, "M 319,410 C 320,405 325,407 325,414 C 326,436 328,454 339,471 L 325,470 C 317,455 313,431 319,410 Z", Outline, 0);
+                Shape(cat, "M 359,418 C 363,410 368,415 370,425 L 381,474 L 367,478 C 369,455 355,430 359,418 Z", Outline, 0);
+                Shape(cat, "M 386,416 C 389,408 394,409 395,420 C 397,442 393,457 391,478 L 378,479 C 384,459 382,434 386,416 Z", Outline, 0);
+                Shape(cat, "M 425,410 C 426,403 432,404 435,416 C 442,443 437,462 429,474 L 414,477 C 425,461 428,434 425,410 Z", Outline, 0);
+            }
 
             if (pose == PetPose.Wave)
             {

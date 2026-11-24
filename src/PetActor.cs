@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
@@ -14,6 +15,11 @@ namespace Xiaohei
         private readonly DispatcherTimer hover = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(380) };
         private readonly DispatcherTimer finish = new DispatcherTimer();
         private readonly DispatcherTimer tailTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        private const int TypingPauseMs = 800;
+        private const int StrokeIntervalMs = 84;
+        private readonly Stopwatch sinceStroke = new Stopwatch();
+        private PetArt.TypingKeyboard typingKeyboard;
+        private bool nextStrokeLeft;
         private bool jumpAfterWave;
         private bool tailAfterSpirits;
         private bool idleExpired;
@@ -82,7 +88,8 @@ namespace Xiaohei
         {
             Pose = pose;
             earAnchor = new FrameworkElement { IsHitTestVisible = false };
-            drawing.Child = PetArt.Draw(true, pose, earAnchor);
+            typingKeyboard = pose == PetPose.Typing ? new PetArt.TypingKeyboard(SystemParameters.ClientAreaAnimation) : null;
+            drawing.Child = PetArt.Draw(true, pose, earAnchor, typingKeyboard);
             TrackEarIfMoving();
             InvalidateArrange();
         }
@@ -164,6 +171,28 @@ namespace Xiaohei
             idleExpired = false;
             idle.Stop();
             idle.Start();
+        }
+
+        internal void TapKeyboard()
+        {
+            if (!IsLoaded || !IsVisible) return;
+            RecordActivity();
+            if (Pose == PetPose.Typing)
+            {
+                // A coalesced tap still extends the pause from the latest input.
+                finish.Stop();
+                finish.Start();
+                if (sinceStroke.ElapsedMilliseconds < StrokeIntervalMs) return;
+            }
+            else
+            {
+                if (Pose != PetPose.Rest && Pose != PetPose.Nap && Pose != PetPose.Tilt) return;
+                Play(PetPose.Typing, TypingPauseMs);
+                nextStrokeLeft = true;
+            }
+            typingKeyboard.Tap(nextStrokeLeft);
+            nextStrokeLeft = !nextStrokeLeft;
+            sinceStroke.Restart();
         }
 
         internal void Touch()

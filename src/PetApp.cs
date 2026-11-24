@@ -78,6 +78,7 @@ namespace Xiaohei
         private Planner planner;
         private Forms.NotifyIcon tray;
         private ContextMenu trayMenu;
+        private bool keyboardRegistered;
         private readonly DispatcherTimer reminderTimer = new DispatcherTimer();
         private DateTime previousReminderTime;
         private bool reminderSaveFailed;
@@ -132,6 +133,7 @@ namespace Xiaohei
             {
                 var source = (HwndSource)PresentationSource.FromVisual(this);
                 source.AddHook(OnDisplayMessage);
+                keyboardRegistered = KeyboardActivity.Register(source.Handle);
                 RestoreLocation();
             };
             previousReminderTime = store.Now;
@@ -289,6 +291,12 @@ namespace Xiaohei
 
         private IntPtr OnDisplayMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
+            if (message == KeyboardActivity.InputMessage && keyboardRegistered && IsVisible)
+            {
+                KeyboardActivity.Receive(lParam, actor);
+                // Leave the message unhandled so Windows can clean up foreground raw input.
+                return IntPtr.Zero;
+            }
             const int wmDisplayChange = 0x007E, wmSettingChange = 0x001A, spiSetWorkArea = 0x002F;
             const int wmTimeChange = 0x001E, wmPowerBroadcast = 0x0218;
             if (message == wmTimeChange || (message == wmPowerBroadcast && (wParam.ToInt64() == 7 || wParam.ToInt64() == 18)))
@@ -521,6 +529,7 @@ namespace Xiaohei
 
         protected override void OnClosed(EventArgs e)
         {
+            if (keyboardRegistered) KeyboardActivity.Unregister();
             reminderTimer.Stop();
             store.Changed -= UpdateBadge;
             if (tray != null)
