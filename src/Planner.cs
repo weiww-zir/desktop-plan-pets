@@ -418,7 +418,7 @@ namespace Xiaohei
                 }
                 if (caption != null)
                 {
-                    var label = Label(caption, festival == null ? 10 : 9, chosen ? Brushes.White : festival == null ? Muted : Leaf);
+                    var label = Label(caption, festival == null ? 9 : 8, chosen ? Brushes.White : festival == null ? Muted : Leaf);
                     if (festival != null) label.FontWeight = FontWeights.Light;
                     label.HorizontalAlignment = HorizontalAlignment.Center;
                     label.VerticalAlignment = VerticalAlignment.Bottom;
@@ -746,23 +746,23 @@ namespace Xiaohei
             menu.IsOpen = true;
         }
 
-        private bool ShowPlannerPrompt(Window owner, string caption, string message, MessageBoxButton buttons)
+        internal static bool ShowPlannerPrompt(Window owner, string caption, string message, MessageBoxButton buttons)
         {
             bool ask = buttons == MessageBoxButton.YesNo;
-            var dialog = new Window { Title = caption, Owner = owner, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            var dialog = new Window { Title = caption, Owner = owner,
+                WindowStartupLocation = owner == null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner,
                 Width = ask ? 224 : 244, Height = ask ? 122 : 148, WindowStyle = WindowStyle.None, AllowsTransparency = true,
-                Background = Brushes.Transparent, ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false, FontFamily = FontFamily };
+                Background = Brushes.Transparent, ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false,
+                FontFamily = new FontFamily("Microsoft YaHei UI") };
             var panel = DialogPanel(dialog, "关闭提示窗口", true);
-            var ink = Paint("#493526");
-            var edge = Paint("#BD946D");
             var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right,
                 Margin = new Thickness(12, 0, 12, 9) };
             if (ask)
             {
-                var yes = Button("是(Y)", delegate { dialog.DialogResult = true; }, Paint("#FFF6E9"), ink);
+                var yes = Button("是(Y)", delegate { dialog.DialogResult = true; }, Sage, Ink);
                 yes.MinWidth = 60;
                 yes.FocusVisualStyle = null;
-                yes.BorderBrush = edge;
+                yes.BorderBrush = PetMenu.PopupEdge;
                 yes.Margin = new Thickness(0, 0, 6, 0);
                 AutomationProperties.SetAutomationId(yes, "ConfirmYes");
                 actions.Children.Add(yes);
@@ -775,9 +775,9 @@ namespace Xiaohei
                     dialog.DialogResult = key == Key.Y;
                 };
             }
-            var dismiss = Button(ask ? "否(N)" : "确定", delegate { dialog.DialogResult = false; }, Paint("#E8CAA8"), ink);
+            var dismiss = Button(ask ? "否(N)" : "确定", delegate { dialog.DialogResult = false; }, Leaf, Brushes.White);
             dismiss.MinWidth = 60;
-            dismiss.BorderBrush = edge;
+            dismiss.BorderBrush = Leaf;
             dismiss.FocusVisualStyle = null;
             dismiss.IsCancel = true;
             dismiss.IsDefault = true;
@@ -785,14 +785,16 @@ namespace Xiaohei
             actions.Children.Add(dismiss);
             DockPanel.SetDock(actions, Dock.Bottom);
             panel.Children.Add(actions);
-            var prompt = Label(message, BodySize, ink);
+            var prompt = Label(message, BodySize, Ink);
             prompt.TextWrapping = TextWrapping.Wrap;
             panel.Children.Add(new ScrollViewer { Content = prompt, Margin = new Thickness(12, 4, 12, 5),
                 VerticalContentAlignment = ask ? VerticalAlignment.Center : VerticalAlignment.Top,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, PanningMode = PanningMode.VerticalOnly });
             dialog.ContentRendered += delegate { dismiss.Focus(); };
-            var pet = Owner as DesktopPet;
+            Window root = owner;
+            while (root != null && root.Owner != null) root = root.Owner;
+            var pet = root as DesktopPet;
             if (pet != null) pet.WatchPlannerWindow(dialog);
             return dialog.ShowDialog() == true;
         }
@@ -874,7 +876,7 @@ namespace Xiaohei
             var details = Label(label.Text, BodySize, Ink);
             details.TextWrapping = TextWrapping.Wrap;
             details.MaxWidth = 330;
-            var tip = new ToolTip { Content = details, PlacementTarget = textArea, Template = PetMenu.TaskHintTemplate,
+            var tip = new ToolTip { Content = details, PlacementTarget = textArea, Template = PetMenu.HintTemplate,
                 FontFamily = FontFamily };
             textArea.ToolTip = tip;
             ToolTipService.SetInitialShowDelay(textArea, 700);
@@ -979,26 +981,24 @@ namespace Xiaohei
         {
             var basePanel = new DockPanel();
             var sheet = RoundedSheet(basePanel);
-            sheet.Background = Paint(prompt ? "#F8EAD7" : "#FBF5EB");
-            sheet.BorderBrush = Paint(prompt ? "#B68A62" : "#CEBBA2");
+            sheet.Background = PetMenu.PopupFill;
+            sheet.BorderBrush = PetMenu.PopupEdge;
             dialog.Content = sheet;
-            var titleInk = Paint("#493526");
-            var titleFill = Paint(prompt ? "#EFD6B7" : "#F2E5D2");
-            var titleBar = new DockPanel { Background = titleFill };
-            var titleBand = new Border { Child = titleBar, Background = titleFill,
+            var titleBar = new DockPanel { Background = PetMenu.PopupHeader };
+            var titleBand = new Border { Child = titleBar, Background = PetMenu.PopupHeader,
                 Padding = prompt ? new Thickness(12, 2, 6, 2) : new Thickness(14, 3, 8, 3) };
             DockPanel.SetDock(titleBand, Dock.Top);
             basePanel.Children.Add(titleBand);
             titleBar.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e)
             { if (e.ButtonState == MouseButtonState.Pressed) dialog.DragMove(); };
-            var close = Button("×", delegate { dialog.Close(); }, Brushes.Transparent, titleInk);
+            var close = Button("×", delegate { dialog.Close(); }, Brushes.Transparent, Ink);
             close.FontSize = 20;
             close.Width = 28;
             close.Padding = new Thickness(0);
             Accessible(close, closeLabel);
             DockPanel.SetDock(close, Dock.Right);
             titleBar.Children.Add(close);
-            var title = Label(dialog.Title, HeadingSize, titleInk, true);
+            var title = Label(dialog.Title, HeadingSize, Ink, true);
             title.TextTrimming = TextTrimming.CharacterEllipsis;
             title.ToolTip = dialog.Title;
             titleBar.Children.Add(title);

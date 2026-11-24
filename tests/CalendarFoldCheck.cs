@@ -274,6 +274,9 @@ namespace Xiaohei
                 Require(area.Contains(digit) && labels.Count == 2 + (mark == null ? 0 : 1),
                     "Incorrect contents of date cell " + name);
                 var caption = labels.Single(x => x.Text == (festival ?? HolidayCalendar.LunarLabel(date)));
+                Require(caption.FontSize == (festival == null ? 9 : 8) &&
+                    caption.FontWeight == (festival == null ? FontWeights.Normal : FontWeights.Light),
+                    "Incorrect lunar or festival caption typography: " + name);
                 var title = InkBounds(caption, cell);
                 Require(area.Contains(title) && title.Top > digit.Bottom, "Second line overlaps the date or is clipped: " + name);
                 if (mark == null) continue;
@@ -285,7 +288,6 @@ namespace Xiaohei
                 var badgeColor = ((SolidColorBrush)badge.Foreground).Color;
                 Require(selected ? badgeColor == Colors.White : badgeColor != Colors.White, "Unclear badge contrast");
                 if (festival == null) continue;
-                Require(caption.FontSize == 9 && caption.FontWeight == FontWeights.Light, "Incorrect festival caption typography");
                 Require(area.Contains(title) && title.Top > digit.Bottom && title.Top > corner.Bottom,
                     "Festival name clipped or overlapping at minimum width: " + name);
                 if (!selected) continue;

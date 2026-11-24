@@ -56,6 +56,38 @@ namespace Xiaohei
             Dispatcher.CurrentDispatcher.Invoke(DispatcherPriority.ApplicationIdle,new Action(delegate {}));
         }
 
+        static void CheckEditingMenu(TextBox input)
+        {
+            input.Focus();
+            foreach (int length in new[] { 2, 0 })
+            {
+                input.Select(0, length);
+                // Send WPF's keyboard context-menu event directly to the field without moving the pointer.
+                var request = (ContextMenuEventArgs)Activator.CreateInstance(typeof(ContextMenuEventArgs),
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, null,
+                    new object[] { input, true }, CultureInfo.InvariantCulture);
+                input.RaiseEvent(request);
+                Settle();
+                var menu = PresentationSource.CurrentSources.OfType<HwndSource>().Where(source => source.RootVisual != null)
+                    .SelectMany(source => Find<ContextMenu>(source.RootVisual))
+                    .Single(candidate => candidate.IsOpen && candidate.PlacementTarget == input);
+                try
+                {
+                    var surface = menu.Template.FindName("MenuSurface", menu) as Border;
+                    Check(surface != null && surface.Background == PetMenu.PopupFill && surface.BorderBrush == PetMenu.PopupEdge &&
+                        menu.Foreground == PetMenu.PopupInk, "default text editing menu uses the shared popup colors");
+                    foreach (var command in new[] { ApplicationCommands.Cut, ApplicationCommands.Copy, ApplicationCommands.Paste })
+                    {
+                        var item = menu.Items.OfType<MenuItem>().Single(entry => entry.Command == command);
+                        bool enabled = command == ApplicationCommands.Paste ? command.CanExecute(null, input) : length > 0;
+                        Check(item.CommandTarget == input && item.IsEnabled == enabled,
+                            command.Name + " keeps its target and availability for selection length " + length);
+                    }
+                }
+                finally { menu.IsOpen = false; Settle(); }
+            }
+        }
+
         static void Legacy(string folder)
         {
             Directory.CreateDirectory(folder);
@@ -212,8 +244,11 @@ namespace Xiaohei
                 "the child uses a real popup anchored to its own text region with custom placement");
             Check(Find<TextBlock>(tip).Select(t => t.Text).SequenceEqual(new[] { second }),
                 "child tooltip displays only its full title without completion marks or sibling text");
-            var fill = Find<Border>(tip).Select(b => b.Background as SolidColorBrush).First(b => b != null);
-            Check(fill.Color == Color.FromRgb(214,223,212), "the rendered tooltip uses its gray-green surface");
+            var tipFrame = Find<Border>(tip).First(b => b.Background is SolidColorBrush);
+            var edge = tipFrame.BorderBrush as SolidColorBrush;
+            Check(((SolidColorBrush)tipFrame.Background).Color == Color.FromRgb(0xD6, 0xDF, 0xD4) &&
+                edge != null && edge.Color == Color.FromRgb(0x8D, 0xA3, 0x8F) && tipFrame.BorderThickness.Top > 0,
+                "the rendered title tooltip uses the shared gray-green fill and edge");
             viewport.ScrollToVerticalOffset(viewport.VerticalOffset + row.TranslatePoint(new Point(),viewport).Y - 3);
             Settle();
             var surface = (FrameworkElement)planner.Content;
@@ -288,6 +323,7 @@ namespace Xiaohei
             try
             {
                 var app = new Application { ShutdownMode=ShutdownMode.OnExplicitShutdown };
+                PetMenu.StyleTextEditingMenus();
                 var folder = Path.Combine(args[0],"interaction-"+Guid.NewGuid().ToString("N"));
                 Legacy(folder);
                 Check(Read(folder).Steps.Select(x=>x.Title).SequenceEqual(new[]{first,second}),
@@ -324,6 +360,7 @@ namespace Xiaohei
                 var titleBox=Find<TextBox>(planner).Single(x=>AutomationProperties.GetName(x)=="任务名称");
                 const string draft = "明天核对摘录出处";
                 titleBox.Text=draft;
+                CheckEditingMenu(titleBox);
                 var outside = new Window { Width=40,Height=40,ShowInTaskbar=false,
                     WindowStyle=WindowStyle.None,Left=SystemParameters.WorkArea.Left+2,Top=SystemParameters.WorkArea.Top+2 };
                 outside.Show(); outside.Activate(); Settle(500);

@@ -14,9 +14,13 @@ namespace Xiaohei
         private static readonly ResourceDictionary Skin = (ResourceDictionary)XamlReader.Parse(@"
 <ResourceDictionary xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
                     xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>
+    <SolidColorBrush x:Key='PopupFill' Color='#D6DFD4'/>
+    <SolidColorBrush x:Key='PopupEdge' Color='#8DA38F'/>
+    <SolidColorBrush x:Key='PopupHeader' Color='#C5D3C3'/>
+    <SolidColorBrush x:Key='PopupInk' Color='#23362C'/>
     <Style x:Key='Surface' TargetType='Border'>
-        <Setter Property='Background' Value='#FBF5E9'/>
-        <Setter Property='BorderBrush' Value='#BEAF96'/>
+        <Setter Property='Background' Value='{StaticResource PopupFill}'/>
+        <Setter Property='BorderBrush' Value='{StaticResource PopupEdge}'/>
         <Setter Property='BorderThickness' Value='1'/>
         <Setter Property='CornerRadius' Value='14'/>
         <Setter Property='Padding' Value='5'/>
@@ -84,21 +88,36 @@ namespace Xiaohei
             <ContentPresenter/>
         </Border>
     </ControlTemplate>
-    <ControlTemplate x:Key='TaskHintSkin' TargetType='ToolTip'>
-        <Border Background='#D6DFD4' BorderBrush='#8C9F90' BorderThickness='1' CornerRadius='8' Padding='9,5'>
-            <ContentPresenter/>
-        </Border>
-    </ControlTemplate>
 </ResourceDictionary>");
 
-        internal static ControlTemplate TaskHintTemplate { get { return (ControlTemplate)Skin["TaskHintSkin"]; } }
+        internal static Brush PopupFill { get { return (Brush)Skin["PopupFill"]; } }
+        internal static Brush PopupEdge { get { return (Brush)Skin["PopupEdge"]; } }
+        internal static Brush PopupHeader { get { return (Brush)Skin["PopupHeader"]; } }
+        internal static Brush PopupInk { get { return (Brush)Skin["PopupInk"]; } }
         internal static ControlTemplate HintTemplate { get { return (ControlTemplate)Skin["HintSkin"]; } }
+
+        internal static void StyleTextEditingMenus()
+        {
+            EventManager.RegisterClassHandler(typeof(ContextMenu), ContextMenu.OpenedEvent, new RoutedEventHandler(delegate(object sender, RoutedEventArgs e)
+            {
+                var menu = (ContextMenu)sender;
+                for (DependencyObject target = menu.PlacementTarget; target is Visual; target = VisualTreeHelper.GetParent(target))
+                {
+                    if (!(target is TextBoxBase)) continue;
+                    // WPF builds these commands for the current selection, spelling and input method.
+                    menu.Template = (ControlTemplate)Skin["MenuSkin"];
+                    menu.Foreground = PopupInk;
+                    menu.Background = Brushes.Transparent;
+                    break;
+                }
+            }));
+        }
 
         internal static void ApplySurface(ContextMenu menu, Window pet)
         {
             menu.FontFamily = new FontFamily("Microsoft YaHei UI");
             menu.FontSize = 13;
-            menu.Foreground = new SolidColorBrush(Color.FromRgb(35, 54, 44));
+            menu.Foreground = PopupInk;
             menu.Background = Brushes.Transparent;
             menu.Template = (ControlTemplate)Skin["MenuSkin"];
             StyleItems(menu, menu, pet);

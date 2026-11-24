@@ -17,6 +17,24 @@ namespace Xiaohei
 {
     internal static class PetApp
     {
+        internal static void ShowError(Window owner, string caption, string message)
+        {
+            if (!Dispatcher.CurrentDispatcher.HasShutdownStarted)
+            {
+                try
+                {
+                    Planner.ShowPlannerPrompt(owner, caption, message, MessageBoxButton.OK);
+                    return;
+                }
+                catch (Exception)
+                {
+                    // WPF may be unable to create a window after a startup or rendering failure.
+                }
+            }
+            if (owner == null) MessageBox.Show(message, caption, MessageBoxButton.OK, MessageBoxImage.Error);
+            else MessageBox.Show(owner, message, caption, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
         [STAThread]
         private static void Main(string[] args)
         {
@@ -30,7 +48,9 @@ namespace Xiaohei
                     var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
                     var tipStyle = new Style(typeof(ToolTip));
                     tipStyle.Setters.Add(new Setter(Control.TemplateProperty, PetMenu.HintTemplate));
+                    tipStyle.Setters.Add(new Setter(Control.ForegroundProperty, PetMenu.PopupInk));
                     app.Resources[typeof(ToolTip)] = tipStyle;
+                    PetMenu.StyleTextEditingMenus();
                     var pet = new DesktopPet(new Store());
                     if (args.Contains("--planner", StringComparer.OrdinalIgnoreCase))
                         pet.ContentRendered += delegate { pet.Dispatcher.BeginInvoke(new Action(pet.ShowPlanner)); };
@@ -44,7 +64,7 @@ namespace Xiaohei
                 }
                 catch (Exception error)
                 {
-                    MessageBox.Show(error.Message, "小黑手帐", MessageBoxButton.OK, MessageBoxImage.Error);
+                    ShowError(null, "小黑手帐", error.Message);
                 }
                 finally { instance.ReleaseMutex(); }
             }
@@ -307,7 +327,7 @@ namespace Xiaohei
                 Top = previous.Top;
                 store.PetLeft = oldLeft;
                 store.PetTop = oldTop;
-                MessageBox.Show(this, "桌宠大小未能保存。\n" + error.Message, Title, MessageBoxButton.OK, MessageBoxImage.Warning);
+                PetApp.ShowError(this, Title, "桌宠大小未能保存。\n" + error.Message);
             }
         }
 
@@ -383,7 +403,7 @@ namespace Xiaohei
             try { store.Save(); }
             catch (Exception error)
             {
-                MessageBox.Show(this, "小黑的位置未能保存。\n" + error.Message, Title, MessageBoxButton.OK, MessageBoxImage.Warning);
+                PetApp.ShowError(this, Title, "小黑的位置未能保存。\n" + error.Message);
             }
         }
 

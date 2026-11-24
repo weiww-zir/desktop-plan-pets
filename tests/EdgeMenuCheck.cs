@@ -103,6 +103,15 @@ namespace Xiaohei
             return (T)control.Template.FindName(name, control);
         }
 
+        static void CheckPopupPalette(Border surface, string name)
+        {
+            var fill = surface == null ? null : surface.Background as SolidColorBrush;
+            var edge = surface == null ? null : surface.BorderBrush as SolidColorBrush;
+            Check(fill != null && fill.Color == Color.FromRgb(0xD6, 0xDF, 0xD4) &&
+                edge != null && edge.Color == Color.FromRgb(0x8D, 0xA3, 0x8F) && surface.BorderThickness.Top > 0,
+                name + " uses the shared popup fill and edge");
+        }
+
         static byte Alpha(BitmapSource bitmap, int x, int y)
         {
             var sample = new byte[4];
@@ -191,6 +200,7 @@ namespace Xiaohei
                 tip.IsOpen = true;
                 Settle();
                 Separate(Bounds(pet), Bounds(tip), "pet help tooltip");
+                CheckPopupPalette(VisualTreeHelper.GetChild(tip, 0) as Border, "pet help tooltip");
                 tip.IsOpen = false;
                 Settle();
                 OpenMenu(pet);
@@ -206,6 +216,8 @@ namespace Xiaohei
                     main.Handle != new WindowInteropHelper(pet).Handle && sub.Handle != IntPtr.Zero &&
                     main.CompositionTarget.UsesPerPixelOpacity && sub.CompositionTarget.UsesPerPixelOpacity,
                     "menu and submenu open in separate transparent native popup windows");
+                CheckPopupPalette(Part<Border>(menu, "MenuSurface"), "pet context menu");
+                CheckPopupPalette(Part<Border>(sizes, "SubmenuSurface"), "size submenu");
                 var peer = UIElementAutomationPeer.CreatePeerForElement(active);
                 var toggle = peer.GetPattern(PatternInterface.Toggle) as IToggleProvider;
                 Check(peer.GetName() == (string)active.Header && toggle != null &&

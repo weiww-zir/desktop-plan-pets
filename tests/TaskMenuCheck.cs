@@ -63,6 +63,7 @@ namespace Xiaohei
                 PresentationSource.FromVisual(menu) is HwndSource, "Task menu did not open over the live planner");
             Require(menu.Items.Cast<MenuItem>().Select(i => (string)i.Header)
                 .SequenceEqual(new[] { "添加子任务", "编辑", "删除", "转长期" }), "Unexpected task commands");
+            CheckPopupSurface(menu.Template.FindName("MenuSurface", menu) as Border, "Task menu");
             return menu;
         }
 
@@ -88,11 +89,33 @@ namespace Xiaohei
                 corners.TopLeft > 0 && corners.TopRight > 0 && corners.BottomLeft > 0 && corners.BottomRight > 0);
         }
 
-        private static Color SheetColor(Window window)
+        private static readonly Color PopupFill = Color.FromRgb(0xD6, 0xDF, 0xD4);
+        private static readonly Color PopupEdge = Color.FromRgb(0x8D, 0xA3, 0x8F);
+
+        private static Border Sheet(Window window)
         {
-            var sheet = Children(window).OfType<Border>().Where(b => b.Background is SolidColorBrush &&
+            return Visuals<Border>((FrameworkElement)window.Content).Where(b => b.Background is SolidColorBrush &&
                 ((SolidColorBrush)b.Background).Color.A > 0).OrderByDescending(b => b.ActualWidth * b.ActualHeight).First();
-            return ((SolidColorBrush)sheet.Background).Color;
+        }
+
+        private static void CheckPopupSurface(Border surface, string name)
+        {
+            var fill = surface == null ? null : surface.Background as SolidColorBrush;
+            var edge = surface == null ? null : surface.BorderBrush as SolidColorBrush;
+            Require(fill != null && fill.Color == PopupFill && edge != null && edge.Color == PopupEdge &&
+                surface.BorderThickness.Top > 0, name + " has the wrong popup fill or edge");
+        }
+
+        private static void CheckDialogPalette(Window window)
+        {
+            CheckPopupSurface(Sheet(window), window.Title);
+            var title = Children(window).OfType<TextBlock>().Single(t => t.Text == window.Title);
+            var bar = VisualTreeHelper.GetParent(title) as Panel;
+            var fill = bar == null ? null : bar.Background as SolidColorBrush;
+            var ink = title.Foreground as SolidColorBrush;
+            Require(fill != null && fill.Color == Color.FromRgb(0xC5, 0xD3, 0xC3) &&
+                ink != null && ink.Color == Color.FromRgb(0x23, 0x36, 0x2C),
+                window.Title + " title must use the shared gray-green header and dark ink");
         }
 
         private static Rect Ink(TextBlock text, Visual relativeTo)
@@ -109,11 +132,17 @@ namespace Xiaohei
             var sheet = (FrameworkElement)dialog.Content;
             var area = new Rect(sheet.RenderSize);
             area.Inflate(1, 1); // layout rounding on fractional DPI
-            if (!error)
+            CheckDialogPalette(dialog);
+            var planner = owner as Planner;
+            if (planner == null)
             {
-                Require(dialog.ActualWidth <= 236.01 && dialog.ActualHeight <= 132.01, "Confirmation exceeds its compact card size");
-                Require(SheetColor(dialog) != SheetColor(owner), "Confirmation needs a distinct surface from its owner");
+                CheckDialogPalette(owner);
+                planner = owner.Owner as Planner;
             }
+            Require(planner != null && ((SolidColorBrush)Sheet(planner).Background).Color != PopupFill,
+                "Floating dialogs must stay distinct from the planner page");
+            if (!error)
+                Require(dialog.ActualWidth <= 236.01 && dialog.ActualHeight <= 132.01, "Confirmation exceeds its compact card size");
             var title = Children(dialog).OfType<TextBlock>().Single(t => t.Text == dialog.Title);
             var body = Children(dialog).OfType<TextBlock>().Single(t => error ? t.Text.Contains("保存失败") : t.Text.EndsWith("？"));
             var regions = new List<Rect> { Ink(title, sheet) };
