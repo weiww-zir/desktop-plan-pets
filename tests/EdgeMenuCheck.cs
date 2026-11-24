@@ -196,13 +196,11 @@ namespace Xiaohei
                 var work = new Rect(screen.Left*scale, screen.Top*scale, screen.Width*scale, screen.Height*scale);
                 Check(Math.Abs(pet.Left + pet.Width - edgeX) < 1 && workPx.Contains(Bounds(pet)) &&
                     ((UIElement)pet.Content).Clip == null, "legacy half-parked pet restores fully visible");
-                var tip = (ToolTip)pet.ToolTip;
-                tip.IsOpen = true;
-                Settle();
-                Separate(Bounds(pet), Bounds(tip), "pet help tooltip");
-                CheckPopupPalette(VisualTreeHelper.GetChild(tip, 0) as Border, "pet help tooltip");
-                tip.IsOpen = false;
-                Settle();
+                var petPeer = UIElementAutomationPeer.CreatePeerForElement(pet);
+                Check(pet.ToolTip == null && ((FrameworkElement)pet.Content).ToolTip == null,
+                    "hovering the pet has no visual help popup");
+                Check(petPeer.GetHelpText().Contains("点击打开手帐") && petPeer.GetHelpText().Contains("按住拖动"),
+                    "the pet's interaction instructions are available to screen readers");
                 OpenMenu(pet);
                 var menu = pet.ContextMenu;
                 var sizes = Item(menu, "桌宠大小");

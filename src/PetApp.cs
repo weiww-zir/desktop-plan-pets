@@ -110,8 +110,6 @@ namespace Xiaohei
             Topmost = true;
             WindowStartupLocation = WindowStartupLocation.Manual;
             Cursor = Cursors.Hand;
-            ToolTip = Hint;
-            ToolTipService.SetInitialShowDelay(this, 600);
             AutomationProperties.SetName(this, "罗小黑桌面宠物");
             AutomationProperties.SetHelpText(this, Hint);
             Content = actor;

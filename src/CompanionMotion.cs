@@ -31,15 +31,16 @@ namespace Xiaohei
             private readonly Spring earLeft = new Spring(), earRight = new Spring();
             private double time, idle, interest, contact, weight, heat, happy, petTime = 10, petHold;
             private double privateHold, privateLids, peekAge = 5, peekSide = 1;
+            private double expressionClosure, shownClosure;
             private int nextFidget, currentFidget;
             private double nextFidgetAt = 4.8, fidgetAge = 3, lastThump = -1;
             private readonly List<Action<double, double, double>> flexibleEdges = new List<Action<double, double, double>>();
             private double lastLeft, lastRight, lastFold;
             private MatrixTransform posture;
             private TranslateTransform gaze, earTip;
-            private ScaleTransform lids, lidCurve, leftPupil, rightPupil;
+            private Eyelids eyelids;
             private RotateTransform tailAngle, liftedAngle;
-            private Canvas openEyes, closedEyes, brows, lifted;
+            private Canvas lifted;
             private Canvas[] particles;
             private TypingKeyboard workbench;
             private bool sleeping;
@@ -49,10 +50,10 @@ namespace Xiaohei
                 if (workbench != null) workbench.IdlePawRaised = false;
                 workbench = null;
                 posture = null;
-                lifted = brows = openEyes = closedEyes = null;
+                lifted = null;
                 particles = null;
                 gaze = earTip = null;
-                lids = lidCurve = leftPupil = rightPupil = null;
+                eyelids = null;
                 liftedAngle = tailAngle = null;
                 flexibleEdges.Clear();
                 RestartFidgetDelay();
@@ -80,20 +81,10 @@ namespace Xiaohei
                     Point tip = new Point(Canvas.GetLeft(anchor), Canvas.GetTop(anchor));
                     TrackPoint(tip, p => { earTip.X = p.X - tip.X; earTip.Y = p.Y - tip.Y; });
                 }
-                gaze = new TranslateTransform();
-                // Each eye has one ivory shape and one pupil. Only the ink follows the pointer.
-                leftPupil = Follow(eyes.Children[2], 286, 225);
-                rightPupil = Follow(eyes.Children[3], 450, 223);
-                lids = new ScaleTransform(1, 1, 370, 234);
-                openEyes = eyes;
-                eyes.RenderTransform = lids;
-                brows = new Canvas { Opacity = 0 };
-                eyes.Children.Add(brows);
-                Shape(brows, "M 271,145 Q 309,141 344,167 M 396,166 Q 427,141 461,143", null, 7, FaceLine);
-                lidCurve = new ScaleTransform(1, 1, 370, 236);
-                closedEyes = new Canvas { Opacity = 0, RenderTransform = lidCurve };
-                Shape(closedEyes, "M 231,240 Q 283,206 337,239 M 400,238 Q 452,205 509,236", null, 9, FaceLine);
-                face.Children.Add(closedEyes);
+                // Bind a replacement pose at the previous gaze and lid phase, including mid-blink.
+                gaze = new TranslateTransform(Clamp(lookX.Value * 16.5, -18, 18), Clamp(lookY.Value * 13.5, -14, 14));
+                eyelids = new Eyelids(eyes, gaze);
+                eyelids.Set(shownClosure, happy);
 
                 tailAngle = null;
                 if (tail != null)
@@ -107,16 +98,6 @@ namespace Xiaohei
                 Shape(lifted,"M 340,399 C 337,414 324,419 310,407 Q 296,395 279,363 C 274,355 276,349 281,346 Q 285,342 290,345 Q 298,340 302,347 C 311,351 312,360 307,366 Q 316,383 332,385",Ink,6);
                 Shape(lifted,"M 284,354 Q 286,350 289,351 M 293,352 Q 295,349 297,350",null,3,FaceLine);
                 particles = MakeParticles(body, false);
-            }
-
-            private ScaleTransform Follow(UIElement pupil, double cx, double cy)
-            {
-                var size = new ScaleTransform(1, 1, cx, cy);
-                var movement = new TransformGroup();
-                movement.Children.Add(size);
-                movement.Children.Add(gaze);
-                pupil.RenderTransform = movement;
-                return size;
             }
 
             internal void AttachNap(Canvas frame, Canvas sleeper)
@@ -312,8 +293,6 @@ namespace Xiaohei
                 lookY.Aim(gy * (1 - paw) + paw * .94 + contact * .36, dt, 3.15, .94);
                 gaze.X = Clamp(lookX.Value * 16.5, -18, 18);
                 gaze.Y = Clamp(lookY.Value * 13.5, -14, 14);
-                double pupilSize = 1 + .085 * interest;
-                leftPupil.ScaleX = leftPupil.ScaleY = rightPupil.ScaleX = rightPupil.ScaleY = pupilSize;
                 double rub = happy * Math.Sin(petTime * 8.3);
                 double peek = Envelope(peekAge / 1.32) * peekSide;
                 lean.Aim(gx * (.65 + 1.45 * interest) + peek * 2.45 + weight * 1.75 - groom * 1.85 - inspect * 2.1 + rub * 1.9,
@@ -327,12 +306,13 @@ namespace Xiaohei
                 body.Translate(.9 * gx + 3.2 * rub, Math.Abs(angle) * .85 + contact * 1.5 + groom * (2 + 2 * Math.Sin(phase * 17)));
                 posture.Matrix = body;
 
-                double blink = Envelope((time % 4.93 - 4.56) / .25);
-                lids.ScaleY = Clamp(1 + .075 * interest - .93 * blink - .94 * privateLids - .90 * happy - .46 * groom - .35 * stretch - .35 * slowBlink - .19 * heat, .065, 1.075);
-                closedEyes.Opacity = Clamp((.41 - lids.ScaleY) / .22, 0, 1);
-                openEyes.Opacity = 1 - closedEyes.Opacity;
-                lidCurve.ScaleY = 2 * happy - 1;
-                brows.Opacity = Clamp((heat - .43) * 1.6, 0, .85) * (1 - happy);
+                double expression = Clamp(1.06 * Math.Max(privateLids, happy) + .46 * groom + .34 * stretch
+                    + .42 * slowBlink + .30 * heat - .085 * interest, 0, 1);
+                expressionClosure += (expression - expressionClosure) * (1 - Math.Exp(-dt * 16));
+                double phaseBlink = time % 4.93 - 4.56;
+                double blink = phaseBlink < .09 ? Clamp(phaseBlink / .09, 0, 1) : Clamp((.27 - phaseBlink) / .145, 0, 1);
+                shownClosure = Math.Max(blink * blink * (3 - 2 * blink), expressionClosure);
+                eyelids.Set(shownClosure, happy);
                 double flap = twitch * Math.Sin(phase * 21);
                 double fold = Clamp((heat - .46) / .54, 0, 1);
                 earLeft.Aim(-1.5 * happy + 2.6 * flap + .9 * interest + .9 * contact - 2.4 * fold, dt, 4.2, .46);

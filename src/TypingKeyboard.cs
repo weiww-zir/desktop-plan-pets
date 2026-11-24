@@ -33,6 +33,7 @@ namespace Xiaohei
                 FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
             private static readonly Dictionary<string, Keycap> Keys = new Dictionary<string, Keycap>(StringComparer.Ordinal);
             private static readonly HashSet<string> ExtendedKeys = ExtendedKeyboard();
+            private static readonly Geometry BoardOutline = Geometry.Parse("M 229,424 Q 233,418 241,418 L 514,418 Q 521,418 526,424 L 561,480 Q 568,495 553,499 L 210,499 Q 193,497 200,484 Z");
             private static readonly DrawingGroup Board = DrawBoard();
             private static readonly DependencyProperty LeftDepth = DependencyProperty.Register("LeftDepth", typeof(double),
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
@@ -40,7 +41,10 @@ namespace Xiaohei
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
             private static readonly DependencyProperty TailDepth = DependencyProperty.Register("TailDepth", typeof(double),
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender,
-                    (d, e) => ((TypingKeyboard)d).UpdateTailVisibility()));
+                    (d, e) => ((TypingKeyboard)d).BendTailTip()));
+            private static readonly DependencyProperty TailAim = DependencyProperty.Register("TailAim", typeof(Point),
+                typeof(TypingKeyboard), new FrameworkPropertyMetadata(new Point(), FrameworkPropertyMetadataOptions.AffectsRender,
+                    (d, e) => ((TypingKeyboard)d).BendTailTip()));
             private static readonly DependencyProperty MouseReach = DependencyProperty.Register("MouseReach", typeof(double),
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
             private static readonly DependencyProperty WheelFlash = DependencyProperty.Register("WheelFlash", typeof(double),
@@ -62,6 +66,10 @@ namespace Xiaohei
             private double leftWeight = 1, rightWeight = 1;
             private readonly Stopwatch sinceMouse = new Stopwatch(), sinceLeft = new Stopwatch();
             private Canvas seatedTail;
+            private System.Windows.Shapes.Path tailTip;
+            private Geometry restingTip;
+            private double restingTipWidth;
+            private readonly Pen tipEdge = FurEdge.Clone();
             private readonly RotateTransform tailSwing = new RotateTransform(0, 430, 420);
             private readonly RotateTransform tailThump = new RotateTransform(0, 430, 420);
             private DependencyProperty latestDepth = LeftDepth;
@@ -95,14 +103,17 @@ namespace Xiaohei
                 };
             }
 
-            internal void AttachTail(Canvas tail)
+            internal void AttachTail(Canvas tail, Canvas leftTip)
             {
                 seatedTail = tail;
+                tailTip = (System.Windows.Shapes.Path)leftTip.Children[0];
+                restingTip = tailTip.Data;
+                restingTipWidth = tailTip.StrokeThickness;
                 var turns = new TransformGroup();
                 turns.Children.Add(tailSwing);
                 turns.Children.Add(tailThump);
                 tail.RenderTransform = turns;
-                UpdateTailVisibility();
+                BendTailTip();
                 if (IsLoaded) SwingTail();
             }
 
@@ -127,11 +138,6 @@ namespace Xiaohei
                     tailSwing.BeginAnimation(RotateTransform.AngleProperty, null);
                     tailThump.BeginAnimation(RotateTransform.AngleProperty, null);
                 }
-            }
-
-            private void UpdateTailVisibility()
-            {
-                if (seatedTail != null) seatedTail.Opacity = (double)GetValue(TailDepth) > .015 ? 0 : 1;
             }
 
             internal void ThumpTail()
@@ -166,7 +172,7 @@ namespace Xiaohei
                 var drawing = new DrawingGroup();
                 using (var dc = drawing.Open())
                 {
-                    dc.DrawGeometry(Case, Rim, Geometry.Parse("M 229,424 Q 233,418 241,418 L 514,418 Q 521,418 526,424 L 561,480 Q 568,495 553,499 L 210,499 Q 193,497 200,484 Z"));
+                    dc.DrawGeometry(Case, Rim, BoardOutline);
                     dc.DrawGeometry(Deck, Edge, Geometry.Parse("M 233,424 Q 236,420 242,420 H 512 Q 518,420 521,425 L 555,483 Q 560,491 549,491 H 214 Q 204,491 209,482 Z"));
                     AddRow(dc, 0, "Esc ` 1 2 3 4 5 6 7 8 9 0 - = Bksp");
                     AddRow(dc, 1, "Tab Q W E R T Y U I O P [ ] \\");
@@ -262,7 +268,14 @@ namespace Xiaohei
                 litKey = anonymous ? null : cap;
                 if (StrikeSide == 0)
                 {
+                    Point start = (Point)GetValue(TailAim), target = Center(cap);
+                    bool crossing = tailTarget != null && start != target && (double)GetValue(TailDepth) > .01;
                     tailTarget = cap;
+                    BeginAnimation(TailAim, null);
+                    SetValue(TailAim, target);
+                    if (motion && crossing)
+                        BeginAnimation(TailAim, new PointAnimation(start, target, TimeSpan.FromMilliseconds(68))
+                            { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop });
                     tailThump.BeginAnimation(RotateTransform.AngleProperty, null);
                 }
                 else
@@ -286,8 +299,14 @@ namespace Xiaohei
                 }
                 if (motion)
                 {
+                    var stroke = animateStroke ? Stroke : FastStroke;
+                    if (StrikeSide == 0)
+                    {
+                        stroke = TailStroke.Clone();
+                        stroke.KeyFrames[0].Value = (double)GetValue(TailDepth);
+                    }
                     SetValue(latestDepth, 0.0);
-                    BeginAnimation(latestDepth, StrikeSide == 0 ? TailStroke : animateStroke ? Stroke : FastStroke);
+                    BeginAnimation(latestDepth, stroke);
                 }
                 else
                     SetPressDepth(1);
@@ -306,7 +325,16 @@ namespace Xiaohei
             {
                 if (heldKey == null || (key != null && key != heldKey)) return;
                 heldKey = null;
-                AnimateTo(heldDepth, 0, 110);
+                double depth = (double)GetValue(heldDepth);
+                if (motion && key != null && heldDepth == TailDepth && depth < .94)
+                {
+                    // Even a make/break pair between display frames gets one complete tap.
+                    var tap = TailStroke.Clone();
+                    tap.KeyFrames[0].Value = depth;
+                    SetValue(TailDepth, 0.0);
+                    BeginAnimation(TailDepth, tap);
+                }
+                else AnimateTo(heldDepth, 0, 110);
                 heldDepth = null;
                 if (key == null)
                 {
@@ -377,6 +405,7 @@ namespace Xiaohei
                 heldKey = null;
                 heldDepth = null;
                 leftTarget = rightTarget = tailTarget = litKey = null;
+                BeginAnimation(TailAim, null);
                 SetDepth(LeftDepth, 0);
                 SetDepth(RightDepth, 0);
                 SetDepth(TailDepth, 0);
@@ -429,7 +458,15 @@ namespace Xiaohei
                 double keyDepth = (double)GetValue(latestDepth), tailDepth = (double)GetValue(TailDepth);
                 if (litKey != null && keyDepth > .1) DrawKey(dc, litKey, Pressed, keyDepth * 2);
                 DrawMouse(dc);
-                if (tailTarget != null && tailDepth > .015) DrawTail(dc, Center(tailTarget), tailDepth);
+                if (tailTip != null && tailTarget != null && tailDepth > 0)
+                {
+                    // The bent tip already sits behind the cat. Bring only its keyboard contact in front of the deck.
+                    dc.PushClip(BoardOutline);
+                    dc.PushOpacity(Math.Min(1, tailDepth * 3));
+                    dc.DrawGeometry(Ink, tipEdge, tailTip.Data);
+                    dc.Pop();
+                    dc.Pop();
+                }
                 if (!IdlePawRaised) DrawPaw(dc, true, Center(leftTarget), leftDepth, leftWeight);
                 if (mousing)
                     DrawPaw(dc, false, new Point(mouse.X + ((mouseButtons & 2) != 0 ? 4 : -8), mouse.Y + (mouseDown ? 9 : 3)),
@@ -469,24 +506,44 @@ namespace Xiaohei
                 dc.Pop();
             }
 
-            private static void DrawTail(DrawingContext dc, Point target, double depth)
+            private static Point BendPoint(double x, double y, double endX, double endY, double depth)
             {
-                double x = 592 + (target.X - 592) * depth, y = 418 + (target.Y - 416) * depth;
-                // The outer loop stays beyond the body. Its tapered end curls back onto the chosen key.
+                return new Point(x + (endX - x) * depth, y + (endY - y) * depth);
+            }
+
+            private void BendTailTip()
+            {
+                if (tailTip == null) return;
+                double depth = (double)GetValue(TailDepth);
+                double unfold = Math.Min(1, depth * 2.5);
+                tailTip.StrokeThickness = tipEdge.Thickness = restingTipWidth + (5 - restingTipWidth) * unfold;
+                if (depth <= 0 || tailTarget == null) { tailTip.Data = restingTip; return; }
+                var key = (Point)GetValue(TailAim);
+                double bendX = Math.Min(244, key.X - 50), reach = key.X - bendX - 24;
+                double bendY = Math.Min(466, key.Y + Math.Min(30, reach * .18));
+                double approach = Math.Min(32, reach * .35), lift = Math.Min(15, reach * .15);
+                // Subdivide the seated tip's original cubic at one third. The folded length unfurls from that point.
+                const double foldX = 266.667, foldY = 425.111;
                 var outline = new StreamGeometry();
                 using (var p = outline.Open())
                 {
-                    p.BeginFigure(new Point(438, 409), true, true);
-                    p.BezierTo(new Point(490, 395), new Point(555, 369), new Point(591, 390), true, true);
-                    p.BezierTo(new Point(630, 390 + 17 * depth), new Point(634, 443 + 23 * depth),
-                        new Point(590, 443 + 30 * depth), true, true);
-                    p.BezierTo(new Point(565, 445 + 36 * depth), new Point(x + 19 * depth, y + 25 * depth),
-                        new Point(x - 5, y + 7), true, true);
-                    p.BezierTo(new Point(x - 15, y), new Point(x - 7, y - 9), new Point(x + 4, y - 5), true, true);
-                    p.BezierTo(new Point(x + 30 * depth, y + 6 * depth), new Point(599, 450 + 18 * depth), new Point(600, 420), true, true);
-                    p.BezierTo(new Point(592, 397), new Point(515, 431), new Point(438, 436), true, true);
+                    p.BeginFigure(new Point(318, 402), true, true);
+                    p.BezierTo(BendPoint(297,399, 293,395, depth), BendPoint(278,391, bendX+9,391, depth),
+                        BendPoint(269,407, bendX-1,413, depth), true,true);
+                    p.BezierTo(BendPoint(265.667,413.333, bendX-16,437, depth), BendPoint(265,419.667, bendX-5,bendY+6, depth),
+                        BendPoint(foldX,foldY, bendX+24,bendY+9, depth), true,true);
+                    p.BezierTo(BendPoint(foldX,foldY, bendX+24+approach,bendY+15, depth), BendPoint(foldX,foldY, key.X-approach,key.Y-lift, depth),
+                        BendPoint(foldX,foldY, key.X-5,key.Y+5, depth), true,true);
+                    p.BezierTo(BendPoint(foldX,foldY, key.X+7,key.Y+7, depth), BendPoint(foldX,foldY, key.X+9,key.Y-6, depth),
+                        BendPoint(foldX,foldY, key.X-3,key.Y-7, depth), true,true);
+                    p.BezierTo(BendPoint(foldX,foldY, key.X-approach-1,key.Y-lift-17, depth), BendPoint(foldX,foldY, bendX+3,bendY+8, depth),
+                        BendPoint(foldX,foldY, bendX+10,435, depth), true,true);
+                    p.BezierTo(BendPoint(270,436, bendX+13,422, depth), BendPoint(282.667,443.333, 283,407, unfold),
+                        BendPoint(302,440, 302,410, unfold), true,true);
+                    p.LineTo(BendPoint(320,434,320,410,unfold), true,true);
                 }
-                dc.DrawGeometry(Ink, FurEdge, outline);
+                outline.Freeze();
+                tailTip.Data = outline;
             }
 
             private static void DrawPaw(DrawingContext dc, bool isLeft, Point target, double depth, double weight)

@@ -80,9 +80,8 @@ namespace Xiaohei
             Check(actor.Pose == PetPose.Typing && Caption(keyboard).Text == "T", "rebound retains the last key until the renewed pause ends");
             Until(() => actor.Pose == PetPose.Rest, "return to seated rest");
             Check(pause.ElapsedMilliseconds >= 775 && pause.ElapsedMilliseconds < 1450 &&
-                !finish.IsEnabled && Field<PetArt.TypingKeyboard>(actor, "typingKeyboard") == keyboard &&
-                string.IsNullOrEmpty(Caption(keyboard).Text) && keyboard.StrikeSide == 0,
-                "the same desk returns to rest with relaxed paws and a blank caption after about 800 ms");
+                !finish.IsEnabled && !Descendants<PetArt.TypingKeyboard>(actor).Any(k => k.IsVisible),
+                "stopping typing removes the keyboard from the pet after about 800 ms");
 
             var normalIdle = idle.Interval;
             idle.Interval = TimeSpan.FromMilliseconds(35);
@@ -173,6 +172,19 @@ namespace Xiaohei
             return count;
         }
 
+        static int FurPixels(BitmapSource image, Rect area)
+        {
+            var crop = new CroppedBitmap(image, new Int32Rect((int)area.X, (int)area.Y,
+                (int)area.Width, (int)area.Height));
+            int stride = crop.PixelWidth * 4;
+            var pixels = new byte[stride * crop.PixelHeight];
+            crop.CopyPixels(pixels, stride, 0);
+            int count = 0;
+            for (int i = 0; i < pixels.Length; i += 4)
+                if (pixels[i+3] == 255 && Math.Max(pixels[i], Math.Max(pixels[i+1], pixels[i+2])) < 40) count++;
+            return count;
+        }
+
         static void AnimatedRebound()
         {
             const int width = 240, height = 228;
@@ -190,7 +202,9 @@ namespace Xiaohei
             a = transform.TransformBounds(a);
             p = transform.TransformBounds(p);
             keyboard.Press("A", true);
-            Until(() => Differences(raised, Capture(scene, width, height), a) >= 4, "animated A makes contact");
+            int restingFur = FurPixels(raised, a);
+            Until(() => FurPixels(Capture(scene, width, height), a) > restingFur + 2,
+                "animated A paw touches the cap before striking P");
             keyboard.Press("P", false);
             Until(delegate {
                 var overlap = Capture(scene, width, height);
@@ -215,6 +229,32 @@ namespace Xiaohei
             keyboard.Release("Enter");
             Until(() => Differences(raised, Capture(scene, width, height), enter) == 0, "tail released Enter");
             Check(!keyboard.IsKeyHeld && Caption(keyboard).Text == "Enter", "Enter release relaxes the tail and preserves the last label");
+            var leftTip = transform.TransformBounds(new Rect(215,392,78,27));
+            Rect space;
+            if (!PetArt.TypingKeyboard.TryGetKeyBounds("Space", out space)) throw new Exception("Missing Space key");
+            space = transform.TransformBounds(space);
+            keyboard.Press("Space", true);
+            keyboard.Hold("Space");
+            keyboard.Release("Space");
+            Until(() => Differences(raised, Capture(scene, width, height), leftTip) > 25 &&
+                Differences(raised, Capture(scene, width, height), space) > 3, "sub-frame Space tap makes visible contact");
+            Until(() => Differences(raised, Capture(scene, width, height), leftTip) == 0,
+                "short Space tap returns the left tip home");
+            keyboard.Press("Space", true);
+            keyboard.Hold("Space");
+            Wait(130);
+            var onSpace = Capture(scene, width, height);
+            keyboard.Press("Enter", true);
+            keyboard.Hold("Enter");
+            Check(Differences(onSpace, Capture(scene, width, height), leftTip) < 12,
+                "switching held special keys keeps the visible left curl extended");
+            Wait(130);
+            var onEnter = Capture(scene, width, height);
+            Check(Differences(onSpace, onEnter, enter) > 3 && Differences(raised, onEnter, leftTip) > 25,
+                "the extended left tip moves from Space to Enter");
+            keyboard.Release("Enter");
+            Until(() => Differences(raised, Capture(scene, width, height), leftTip) == 0,
+                "switched special keys restore one seated tip");
             host.Close();
         }
 
@@ -300,18 +340,32 @@ namespace Xiaohei
             var neutral = Capture(scene, width, height);
             var map = keys.TransformToAncestor(scene);
             var board = map.TransformBounds(new Rect(198, 419, 366, 81));
-            var tail = map.TransformBounds(new Rect(454, 370, 165, 73));
+            var leftTip = map.TransformBounds(new Rect(215, 392, 78, 27));
+            var rightRoot = map.TransformBounds(new Rect(460, 382, 163, 35));
+            var originalTip = Descendants<System.Windows.Shapes.Path>(scene).Single(path =>
+                path.Data.Bounds.Left > 260 && path.Data.Bounds.Left < 270 && path.Data.Bounds.Right == 320);
+            var restingOutline = originalTip.Data;
             var mouse = map.TransformBounds(new Rect(570, 430, 64, 68));
             foreach (string key in new[] { "Space", "Enter", "Bksp", "Esc" })
             {
                 keys.Press(key, true);
                 var down = Capture(scene, width, height);
                 Rect cap;
-                Check(keys.StrikeSide == 0 && Caption(keys).Text == key && PetArt.TypingKeyboard.TryGetKeyBounds(key, out cap) &&
-                    Differences(neutral, down, map.TransformBounds(cap)) >= 4 && Differences(neutral, down, tail) >= 180,
-                    key + " uses the tail and visibly contacts its own keycap");
+                if (!PetArt.TypingKeyboard.TryGetKeyBounds(key, out cap)) throw new Exception("Missing " + key);
+                Check(keys.StrikeSide == 0 && Caption(keys).Text == key && Differences(neutral, down, leftTip) >= 180,
+                    key + " unfurls the short left tail tip with reduced motion");
+                var onCap = map.TransformBounds(cap);
+                Check(FurPixels(down, onCap) > FurPixels(neutral, onCap) + 4 && originalTip.Data != restingOutline,
+                    key + " moves the original tip and paints black fur on the cap");
+                Check(Differences(neutral, down, rightRoot) == 0, key + " leaves the seated right tail silhouette intact");
+                keys.SetPressDepth(.5);
+                var halfway = Capture(scene, width, height);
+                Check(Differences(neutral, halfway, leftTip) > 10 && Differences(halfway, down, leftTip) > 10,
+                    key + " bends the left silhouette progressively");
                 keys.Rest();
-                Check(Differences(neutral, Capture(scene, width, height), board) == 0, key + " releases the keyboard completely");
+                var tipUp = Capture(scene, width, height);
+                Check(originalTip.Data == restingOutline && Differences(neutral, tipUp, board) == 0 && Differences(neutral, tipUp, leftTip) == 0,
+                    key + " restores the original tip and releases the keyboard completely");
             }
             keys.Press("A", true);
             keys.Mouse(0, 0, 0, 0);

@@ -1,6 +1,12 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 
 namespace Xiaohei
@@ -47,9 +53,134 @@ namespace Xiaohei
             Dispatcher.PushFrame(loop);
         }
 
-        private static T Field<T>(PetActor actor, string name)
+        private static T Field<T>(object target, string name)
         {
-            return (T)typeof(PetActor).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(actor);
+            return (T)target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(target);
+        }
+
+        private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+        {
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                var child = VisualTreeHelper.GetChild(root, i);
+                if (child is T) yield return (T)child;
+                foreach (var item in Descendants<T>(child)) yield return item;
+            }
+        }
+
+        private static PetArt.TypingKeyboard VisibleKeyboard(DependencyObject root)
+        {
+            return Descendants<PetArt.TypingKeyboard>(root).FirstOrDefault(d => d.IsVisible);
+        }
+
+        private sealed class EyeFrame
+        {
+            internal Rect[] Pupils;
+            internal int White;
+            internal bool HasBrow;
+
+            internal EyeFrame(FrameworkElement scene, FrameworkElement ear)
+            {
+                scene.Measure(new Size(480, 455));
+                scene.Arrange(new Rect(0, 0, 480, 455));
+                scene.UpdateLayout();
+                var paths = Descendants<Path>(scene).ToList();
+                var pupils = paths.Where(p => p.Stroke is SolidColorBrush &&
+                    ((SolidColorBrush)p.Stroke).Color == Color.FromRgb(61, 42, 32)).OrderBy(p => p.Data.Bounds.Left).ToArray();
+                if (pupils.Length != 2) throw new InvalidOperationException("Expected two seated pupils, found " + pupils.Length);
+                var face = (Visual)VisualTreeHelper.GetParent(pupils[0]);
+                while (!face.IsAncestorOf(ear)) face = (Visual)VisualTreeHelper.GetParent(face);
+                Pupils = pupils.Select(p => p.TransformToAncestor(face).TransformBounds(p.Data.Bounds)).ToArray();
+                // Look for separate strokes over the eyes, excluding the rims, ears and the closed lids.
+                HasBrow = paths.Any(p => p.Fill == null && p.Stroke != null && p.Data != null && !p.Data.Bounds.IsEmpty && p.Data.Bounds.Top > 130 &&
+                    p.Data.Bounds.Bottom < 180 && p.Data.Bounds.Left > 210 && p.Data.Bounds.Right < 523);
+                // Sample the left eye in face coordinates so head tilts and breathing cannot mimic an eyelid.
+                var brush = new VisualBrush(face) { ViewboxUnits = BrushMappingMode.Absolute,
+                    Viewbox = new Rect(203, 120, 166, 212), Stretch = Stretch.Fill };
+                var eye = new DrawingVisual();
+                using (var dc = eye.RenderOpen()) dc.DrawRectangle(brush, null, new Rect(0, 0, 166, 212));
+                var frame = new RenderTargetBitmap(166, 212, 96, 96, PixelFormats.Pbgra32);
+                frame.Render(eye);
+                var rgba = new byte[166 * 212 * 4];
+                frame.CopyPixels(rgba, 166 * 4, 0);
+                for (int i = 0; i < rgba.Length; i += 4)
+                    if (rgba[i + 2] > 211 && rgba[i + 1] > 204 && rgba[i] > 181) White++;
+            }
+
+            internal bool SamePupilSize(EyeFrame other)
+            {
+                return Pupils.Zip(other.Pupils, (a, b) => Math.Abs(a.Width - b.Width) < .3 &&
+                    Math.Abs(a.Height - b.Height) < .3).All(same => same);
+            }
+        }
+
+        private static void EyeExpressions()
+        {
+            var motion = new PetArt.CompanionMotion();
+            var ear = new FrameworkElement();
+            var scene = PetArt.Draw(false, PetPose.Rest, ear, null, motion);
+            var seated = new EyeFrame(scene, ear);
+            for (int i = 0; i < 18; i++) motion.Tick(1.0 / 60, .88, -.35, 1);
+            var tracking = new EyeFrame(scene, ear);
+            Require(seated.White > 5000 && tracking.SamePupilSize(seated) &&
+                tracking.Pupils.Zip(seated.Pupils, (a, b) => a.Left > b.Left + 2).All(moved => moved),
+                "fast pointer tracking moves both pupils without stretching them (" + seated.Pupils[0] + " to " +
+                tracking.Pupils[0] + ", neutral white pixels " + seated.White + ")");
+            for (int i = 0; i < 8; i++) { motion.Pulse(i % 2 == 0 ? -1 : 1); motion.Tick(.033, .88, -.35, 0); }
+            var typing = new EyeFrame(scene, ear);
+            Require(!typing.HasBrow && typing.SamePupilSize(seated), "rapid typing adds no eyebrows or pupil deformation");
+            Require(typing.White < tracking.White * .97, "typing changes the visible eye opening: " + tracking.White + " to " + typing.White);
+            motion.PrivateInput();
+            motion.Tick(1.0 / 60, .88, -.35, 0);
+            var closing = new EyeFrame(scene, ear);
+            for (int i = 0; i < 14; i++) motion.Tick(.025, .88, -.35, 0);
+            var shut = new EyeFrame(scene, ear);
+            Require(shut.White < seated.White * .25, "the eyelids hide the eye white in private mode: " + shut.White + "/" + seated.White);
+            Require(closing.White > shut.White + (typing.White - shut.White) * .25,
+                "the first frame of closure retains visible eye white before the lids finish closing");
+            foreach (var pose in new[] { PetPose.Typing, PetPose.Rest, PetPose.Tilt })
+            {
+                ear = new FrameworkElement();
+                scene = PetArt.Draw(false, pose, ear, null, motion);
+                var first = new EyeFrame(scene, ear);
+                Require(Math.Abs(first.White - shut.White) < seated.White * .035 &&
+                    first.Pupils.Zip(shut.Pupils, (a, b) => (a.TopLeft - b.TopLeft).Length < .7).All(stable => stable),
+                    "first frame keeps eye closure and gaze in " + pose);
+            }
+        }
+
+        private static void CompanionWithoutKeyboard(Window host, PetActor pet)
+        {
+            var motion = Field<PetArt.CompanionMotion>(pet, "companion");
+            var pointer = Field<PetPointer>(pet, "pointer");
+            pet.PointerActivity(8, 0, 0, 0);
+            Wait(40);
+            pet.PointerActivity(1900, 0, 0, 0);
+            Wait(100);
+            Require(VisibleKeyboard(pet) == null && (!SystemParameters.ClientAreaAnimation ||
+                Field<double>(motion, "peekAge") < 1), "a fast pointer pass still animates the cat without revealing the keyboard");
+            // Move the isolated test window under the pointer, keeping the system cursor untouched.
+            foreach (double x in new[] { .24, .42, .60, .40, .24, .52 })
+            {
+                var cursor = System.Windows.Forms.Cursor.Position;
+                var actual = pet.PointFromScreen(new Point(cursor.X, cursor.Y));
+                host.Left += actual.X - pet.ActualWidth * x;
+                host.Top += actual.Y - pet.ActualHeight * .36;
+                Wait(35);
+                pet.PointerActivity(70, 0, 0, 0);
+            }
+            Wait(130);
+            Require(pointer.Petting && VisibleKeyboard(pet) == null && (!SystemParameters.ClientAreaAnimation ||
+                Field<Canvas[]>(motion, "particles").Any(p => p.Opacity > .05)), "petting the bare head produces hearts without a keyboard");
+            pet.Leave();
+            var idle = Field<DispatcherTimer>(pet, "idle");
+            var normal = idle.Interval;
+            idle.Interval = TimeSpan.FromMilliseconds(45);
+            Wait(150);
+            idle.Interval = normal;
+            Require(pet.Pose == PetPose.Nap && VisibleKeyboard(pet) == null && (!SystemParameters.ClientAreaAnimation ||
+                Field<DispatcherTimer>(pet, "frames").IsEnabled), "the bare cat can nap and run its sleeping animation");
+            pet.Touch();
         }
 
         [STAThread]
@@ -59,35 +190,56 @@ namespace Xiaohei
             {
                 PointerGestures();
                 var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                EyeExpressions();
                 var pet = new PetActor();
-                var host = new Window { Width = 120, Height = 125, Content = pet,
+                var host = new Window { Width = 120, Height = 125, Content = pet, Left = 80, Top = 80,
+                    WindowStartupLocation = WindowStartupLocation.Manual, WindowStyle = WindowStyle.None,
                     ShowActivated = false, ShowInTaskbar = false };
                 host.Show();
                 Wait(60);
-                var desk = Field<PetArt.TypingKeyboard>(pet, "typingKeyboard");
                 var frames = Field<DispatcherTimer>(pet, "frames");
-                Require(pet.Pose == PetPose.Rest && desk != null, "keyboard and mouse are present before the first input");
+                Require(pet.Pose == PetPose.Rest && VisibleKeyboard(pet) == null, "the seated cat starts without a keyboard");
+                pet.PointerActivity(60, 0, 0, 0);
+                Require(VisibleKeyboard(pet) == null, "moving the pointer does not reveal a keyboard");
+                pet.PointerActivity(0, 0, 1, 0);
+                Require(VisibleKeyboard(pet) == null, "holding the mouse button does not reveal a keyboard");
+                pet.PointerActivity(0, 0, 8, 0);
+                Require(VisibleKeyboard(pet) == null, "releasing the mouse button does not reveal a keyboard");
+                pet.PointerActivity(0, 0, 0, -120);
+                Require(pet.Pose != PetPose.Typing && VisibleKeyboard(pet) == null, "scrolling alone does not open a keyboard");
+                pet.Enter();
+                Wait(520);
+                Require(pet.Pose == PetPose.Tilt && VisibleKeyboard(pet) == null, "hovering tilts the cat without adding a keyboard");
                 pet.TapKeyboard("Enter", false, true);
-                Require(desk.IsKeyHeld && desk.StrikeSide == 0, "the tail presses and holds Enter");
+                var desk = VisibleKeyboard(pet);
+                Require(desk != null && desk.IsKeyHeld && desk.StrikeSide == 0, "physical key-down brings out the keyboard and the tail holds Enter");
+                pet.PointerActivity(0, 0, 1, 0);
+                pet.PointerActivity(0, 0, 0, 120);
                 Wait(900);
-                Require(pet.Pose == PetPose.Typing && desk.IsKeyHeld, "a held key survives the normal pause");
+                Require(pet.Pose == PetPose.Typing && desk.IsKeyHeld && VisibleKeyboard(pet) == desk, "a held key survives the normal pause while using the mouse");
                 pet.ReleaseKeyboard("A");
                 Require(desk.IsKeyHeld, "releasing another key does not lift the tail");
                 pet.ReleaseKeyboard("Enter");
-                Wait(915);
-                Require(pet.Pose == PetPose.Rest && ReferenceEquals(desk, Field<PetArt.TypingKeyboard>(pet, "typingKeyboard")), "returning to rest keeps the same desk");
-                pet.PointerActivity(0, 0, 1, 0);
-                Wait(865);
-                Require(pet.Pose == PetPose.Typing && desk.StrikeSide == 1, "the mouse paw stays in position while held");
-                pet.PointerActivity(0, 0, 8, 0);
-                Wait(900);
-                Require(pet.Pose == PetPose.Rest, "mouse release eventually retracts the paw");
+                Wait(290);
+                pet.PointerActivity(90, 0, 0, 0);
+                Wait(350);
                 pet.PointerActivity(0, 0, 0, -120);
-                Require(pet.Pose == PetPose.Typing && desk.StrikeSide == 1, "scrolling operates the miniature mouse");
+                Require(VisibleKeyboard(pet) == desk && !desk.IsKeyHeld, "key-up leaves the keyboard visible during its brief pause");
+                Wait(330);
+                Require(pet.Pose == PetPose.Rest && VisibleKeyboard(pet) == null && Field<int>(pet, "heldButtons") != 0,
+                    "pointer motion, scrolling and holding a mouse button do not extend the keyboard deadline");
+                pet.PointerActivity(0, 0, 8, 0);
+                pet.PointerActivity(0, 0, 0, -120);
+                Require(VisibleKeyboard(pet) == null, "a late mouse release and scroll do not reopen the keyboard");
+                CompanionWithoutKeyboard(host, pet);
                 pet.PointerActivity(0, 0, 1, 0);
+                // Touch woke the nap through its normal stretch. Let that independent action finish first.
+                Wait(1240);
                 pet.TapKeyboard("Ctrl", false, true);
+                desk = VisibleKeyboard(pet);
+                Require(desk != null && desk.IsKeyHeld, "a fresh physical key opens the keyboard again");
                 pet.ResetTransientInput();
-                Require(pet.Pose == PetPose.Rest && !desk.IsKeyHeld && Field<int>(pet, "heldButtons") == 0,
+                Require(pet.Pose == PetPose.Rest && VisibleKeyboard(pet) == null && Field<int>(pet, "heldButtons") == 0,
                     "a device or session change clears a missing key and mouse release");
                 pet.SetSessionActive(false);
                 pet.TapKeyboard("B");

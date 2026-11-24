@@ -108,10 +108,15 @@ namespace Xiaohei
                 foreach (var child in Visuals(VisualTreeHelper.GetChild(parent, i))) yield return child;
         }
 
-        private static string VisibleKeycap(PetActor actor)
+        private static PetArt.TypingKeyboard Workbench(PetActor actor)
         {
             actor.UpdateLayout();
-            var keyboard = Visuals(actor).OfType<PetArt.TypingKeyboard>().SingleOrDefault();
+            return Visuals(actor).OfType<PetArt.TypingKeyboard>().SingleOrDefault();
+        }
+
+        private static string VisibleKeycap(PetActor actor)
+        {
+            var keyboard = Workbench(actor);
             if (keyboard == null) return null;
             return Visuals(keyboard).OfType<TextBlock>().Where(label => label.IsVisible && !String.IsNullOrEmpty(label.Text))
                 .Select(label => label.Text).SingleOrDefault();
@@ -141,6 +146,8 @@ namespace Xiaohei
             {
                 foreach (bool released in new[] { true, false })
                 {
+                    // A modifier holds its cap only after an ordinary keystroke has opened the keyboard.
+                    if (!released) KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, true, true);
                     bytes[headerSize + 2] = (byte)(released ? 1 : 0);
                     object packet = Marshal.PtrToStructure(memory.AddrOfPinnedObject(), packetType);
                     object header = headerField.GetValue(packet), body = bodyField.GetValue(packet);
@@ -270,26 +277,29 @@ namespace Xiaohei
             var input = (KeyboardActivity)typeof(DesktopPet).GetField("input", instance).GetValue(pet);
             var pointer = (KeyboardActivity.PointerFeedback)typeof(KeyboardActivity).GetField("pointer", instance).GetValue(input);
             var heldButtons = typeof(PetActor).GetField("heldButtons", instance);
+            var pointerState = (PetPointer)typeof(PetActor).GetField("pointer", instance).GetValue(actor);
+            var sample = typeof(PetPointer).GetField("screenPoint", instance);
+            KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, true, true);
             actor.PointerActivity(0, 0, 1, 0);
-            KeyboardActivity.AnimatePress(actor, 1, 0, 0x10, true, true);
-            var scene = Visuals(actor).OfType<PetArt.TypingKeyboard>().Single();
-            Check(scene.IsKeyHeld && (int)heldButtons.GetValue(actor) == 1, "the reset fixture has both a held mouse button and a held key");
+            Check(Workbench(actor).IsKeyHeld && (int)heldButtons.GetValue(actor) == 1,
+                "the reset fixture has both a held mouse button and a held key");
             var movement = MouseFixture(0, 0, 0, 140, 0);
             pointer.Receive(movement);
             input.Reset();
             Pump(100);
-            Check(actor.Pose == PetPose.Rest && !scene.IsKeyHeld && VisibleKeycap(actor) == null && (int)heldButtons.GetValue(actor) == 0,
-                "reset releases held controls, clears their label and cancels queued motion");
+            Check(actor.Pose == PetPose.Rest && Workbench(actor) == null && (int)heldButtons.GetValue(actor) == 0 && sample.GetValue(pointerState) == null,
+                "reset releases held controls, removes the keyboard and cancels queued motion");
             pointer.Receive(movement);
             Pump(85);
-            Check(actor.Pose == PetPose.Typing, "a reset subscription still delivers subsequent mouse movement");
+            Check(sample.GetValue(pointerState) != null && actor.Pose != PetPose.Typing && Workbench(actor) == null,
+                "a reset subscription still receives mouse movement without opening the keyboard");
             input.Reset();
             KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, true, true);
             Check(VisibleKeycap(actor) == "A", "a new keyboard make displays normally after reset");
             // A targeted device-removal notification exercises the window hook without disconnecting a real device.
             if (!PostMessage(new WindowInteropHelper(pet).Handle, 0x00FE, new IntPtr(2), IntPtr.Zero)) throw new Win32Exception();
             Pump(75);
-            Check(!scene.IsKeyHeld && actor.Pose == PetPose.Rest && VisibleKeycap(actor) == null,
+            Check(actor.Pose == PetPose.Rest && Workbench(actor) == null,
                 "a device-removal message to the live pet also clears a missing release");
 
             var hook = DesktopSwitchHook();
@@ -301,11 +311,11 @@ namespace Xiaohei
             // Call only our boundary, never switch or broadcast an event to a desktop.
             callback.DynamicInvoke(hook, 0x001Fu, IntPtr.Zero, 0, 0, 0u, 0u);
             callback.DynamicInvoke(IntPtr.Zero, 0x0020u, IntPtr.Zero, 0, 0, 0u, 0u);
-            Check(scene.IsKeyHeld, "unrelated events and an invalid listener cannot reset the current input");
+            Check(Workbench(actor).IsKeyHeld, "unrelated events and an invalid listener cannot reset the current input");
             callback.DynamicInvoke(hook, 0x0020u, IntPtr.Zero, 0, 0, 0u, 0u);
             Pump(85);
-            Check(!scene.IsKeyHeld && actor.Pose == PetPose.Rest && VisibleKeycap(actor) == null,
-                "the desktop-switch boundary clears the active key and cancels pending pointer feedback");
+            Check(actor.Pose == PetPose.Rest && Workbench(actor) == null && sample.GetValue(pointerState) == null,
+                "the desktop-switch boundary removes the keyboard and cancels pending pointer feedback");
         }
 
         private static void CheckRegistrationOwnership(Window editor, PetActor actor)
@@ -421,16 +431,28 @@ namespace Xiaohei
                     KeyboardActivity.AnimatePress(actor, 0, 0);
                     KeyboardActivity.AnimatePress(actor, 2, 0);
                     KeyboardActivity.AnimatePress(actor, 1, 3);
-                    Check(actor.Pose == PetPose.Rest, "invalid handles, mouse, HID and extended key releases do not start typing");
+                    Check(actor.Pose == PetPose.Rest && Workbench(actor) == null, "resting, invalid input and release events show the original cat without a keyboard");
+                    foreach (ushort modifier in new ushort[] { 0x10, 0x11, 0x12, 0x14, 0x5B })
+                    {
+                        KeyboardActivity.AnimatePress(actor, 1, 0, modifier, true, true);
+                        Check(actor.Pose != PetPose.Typing && Workbench(actor) == null,
+                            "a standalone modifier keeps the keyboard hidden: " + modifier.ToString("X2"));
+                        KeyboardActivity.AnimatePress(actor, 1, 1, modifier, true, true);
+                    }
+                    KeyboardActivity.AnimatePress(actor, 1, 0, 0x11, false, true);
+                    actor.PointerActivity(0, 0, 0, 120);
+                    KeyboardActivity.AnimatePress(actor, 1, 1, 0x11, false, true);
+                    Check(actor.Pose != PetPose.Typing && Workbench(actor) == null,
+                        "Ctrl plus wheel keeps the keyboard hidden even when labels are disabled");
                     KeyboardActivity.AnimatePress(actor, 1, 0);
-                    Check(actor.Pose == PetPose.Typing, "a decoded keyboard make starts typing without any key identifier");
+                    Check(actor.Pose == PetPose.Typing && Workbench(actor) != null, "a decoded keyboard make opens the keyboard without any key identifier");
                     Pump(400);
                     KeyboardActivity.AnimatePress(actor, 1, 2);
                     var elapsed = Stopwatch.StartNew();
                     Pump(580);
                     Check(actor.Pose == PetPose.Typing, "another keyboard make extends the current typing interval");
                     while (actor.Pose == PetPose.Typing && elapsed.ElapsedMilliseconds < 1100) Pump(10);
-                    Check(actor.Pose == PetPose.Rest && elapsed.ElapsedMilliseconds >= 650 && elapsed.ElapsedMilliseconds <= 1000,
+                    Check(actor.Pose == PetPose.Rest && Workbench(actor) == null && elapsed.ElapsedMilliseconds >= 650 && elapsed.ElapsedMilliseconds <= 1000,
                         "the pet returns to rest " + elapsed.ElapsedMilliseconds + " ms after the last key press");
                     Check(GetActiveWindow() == editorHandle && field.IsKeyboardFocused && !pet.IsActive,
                         "the pet animation leaves the editor's keyboard focus in place");
@@ -438,6 +460,7 @@ namespace Xiaohei
                     editor.Activate();
                     field.Focus();
                     CheckMouseFeedback(actor);
+                    Check(actor.Pose != PetPose.Typing && Workbench(actor) == null, "mouse movement, button and wheel activity alone keep the keyboard hidden");
                     Check(GetActiveWindow() == editorHandle && field.IsKeyboardFocused && !pet.IsActive,
                         "pointer feedback preserves the editor's focus and active window");
                     CheckInputReset(pet, actor);

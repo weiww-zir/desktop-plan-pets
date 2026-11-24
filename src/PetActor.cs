@@ -91,7 +91,7 @@ namespace Xiaohei
             };
             finish.Tick += delegate
             {
-                if (Pose == PetPose.Typing && (heldButtons != 0 || typingKeyboard.IsKeyHeld)) return;
+                if (Pose == PetPose.Typing && typingKeyboard.IsKeyHeld) return;
                 finish.Stop();
                 if (tailAfterSpirits)
                 {
@@ -105,18 +105,11 @@ namespace Xiaohei
 
         private void SetPose(PetPose pose)
         {
-            bool atDesk = pose == PetPose.Rest || pose == PetPose.Typing || pose == PetPose.Tilt;
+            if (typingKeyboard != null) typingKeyboard.Rest();
             Pose = pose;
-            if (atDesk && typingKeyboard != null)
-            {
-                if (pose == PetPose.Rest) typingKeyboard.Rest();
-            }
-            else
-            {
-                earAnchor = new FrameworkElement { IsHitTestVisible = false };
-                typingKeyboard = atDesk ? new PetArt.TypingKeyboard(SystemParameters.ClientAreaAnimation) : null;
-                drawing.Child = PetArt.Draw(true, atDesk ? PetPose.Typing : pose, earAnchor, typingKeyboard, companion);
-            }
+            earAnchor = new FrameworkElement { IsHitTestVisible = false };
+            typingKeyboard = pose == PetPose.Typing ? new PetArt.TypingKeyboard(SystemParameters.ClientAreaAnimation) : null;
+            drawing.Child = PetArt.Draw(true, pose, earAnchor, typingKeyboard, companion);
             ScheduleFrames();
             TrackEarIfMoving();
             InvalidateArrange();
@@ -126,7 +119,7 @@ namespace Xiaohei
         {
             if (typingKeyboard != null) typingKeyboard.SetMotionActive(sessionActive && IsLoaded && IsVisible);
             if (!sessionActive || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation ||
-                (typingKeyboard == null && Pose != PetPose.Nap))
+                (Pose != PetPose.Rest && Pose != PetPose.Tilt && Pose != PetPose.Typing && Pose != PetPose.Nap))
             {
                 frames.Stop();
                 return;
@@ -228,9 +221,9 @@ namespace Xiaohei
             companion.ResetIdle();
         }
 
-        private bool StartInput()
+        internal void TapKeyboard(string key = null, bool privateInput = false, bool held = false)
         {
-            if (!sessionActive || !IsLoaded || !IsVisible) return false;
+            if (!sessionActive || !IsLoaded || !IsVisible) return;
             RecordActivity();
             if (Pose == PetPose.Typing)
             {
@@ -240,15 +233,9 @@ namespace Xiaohei
             else
             {
                 if (Pose != PetPose.Rest && Pose != PetPose.Nap && Pose != PetPose.Tilt &&
-                    !(Pose == PetPose.TailKittens && automaticTailPlaying)) return false;
+                    !(Pose == PetPose.TailKittens && automaticTailPlaying)) return;
                 Play(PetPose.Typing, TypingPauseMs);
             }
-            return true;
-        }
-
-        internal void TapKeyboard(string key = null, bool privateInput = false, bool held = false)
-        {
-            if (!StartInput()) return;
             bool newStroke = !sinceStroke.IsRunning || sinceStroke.ElapsedMilliseconds >= StrokeIntervalMs;
             lastKey = clock.Elapsed.TotalSeconds;
             // Always retarget the keycap, even while a previous paw stroke is in flight.
@@ -282,18 +269,17 @@ namespace Xiaohei
             bool moved = pointer.Sample(screen, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height),
                 PointFromScreen(screen), RenderSize, now, dx, dy, (buttons | heldButtons) != 0 || wheel != 0, jitter);
             if (!moved && buttons == 0 && wheel == 0) return;
-            if (!StartInput()) return;
+            Touch();
             if (pointer.Petting)
             {
-                typingKeyboard.Rest();
                 companion.Pet();
                 return;
             }
+            if (typingKeyboard == null) return;
             if (down != 0 && (heldButtons & down) != down)
                 typingKeyboard.Mouse(pointer.MouseX, pointer.MouseY, heldButtons | down, 0);
             typingKeyboard.Mouse(pointer.MouseX, pointer.MouseY, heldButtons, wheel);
             if (down != 0 || wheel != 0) companion.Pulse(1);
-            if (heldButtons != 0) finish.Stop();
         }
 
         internal void EndTyping()

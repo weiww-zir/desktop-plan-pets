@@ -135,7 +135,7 @@ namespace Xiaohei
             if (pose == PetPose.Typing)
             {
                 typing = typing ?? new TypingKeyboard(motion);
-                typing.AttachTail(tail);
+                typing.AttachTail(tail, leftTip);
                 cat.Children.Add(typing);
             }
             else
@@ -183,14 +183,13 @@ namespace Xiaohei
                 companion.AttachSitting(body, face, eyes, pose == PetPose.Typing ? null : tail, earAnchor, typing);
             else if (motion)
             {
-                var eyelids = new ScaleTransform(1, 1, 369, 232);
+                var eyelids = new Eyelids(eyes, null);
                 var tailAngle = new RotateTransform(0, 422, 427);
-                eyes.RenderTransform = eyelids;
                 if (pose != PetPose.Typing) tail.RenderTransform = tailAngle;
                 var blink = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromSeconds(6.3), RepeatBehavior = RepeatBehavior.Forever };
-                blink.KeyFrames.Add(new DiscreteDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(5.87))));
-                blink.KeyFrames.Add(new LinearDoubleKeyFrame(0.065, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(5.96))));
-                blink.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(6.10))));
+                blink.KeyFrames.Add(new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(5.87))));
+                blink.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(5.96))));
+                blink.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(6.10))));
                 var flick = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromSeconds(4.7), RepeatBehavior = RepeatBehavior.Forever };
                 flick.KeyFrames.Add(new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(2.2))));
                 flick.KeyFrames.Add(new SplineDoubleKeyFrame(-5, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(2.95)), new KeySpline(.4, 0, .4, 1)));
@@ -198,16 +197,105 @@ namespace Xiaohei
                 Timeline.SetDesiredFrameRate(flick, 18);
                 Timeline.SetDesiredFrameRate(blink, 24);
                 frame.Loaded += delegate {
-                    eyelids.BeginAnimation(ScaleTransform.ScaleYProperty, blink);
+                    eyelids.BeginAnimation(Eyelids.ClosureProperty, blink);
                     tailAngle.BeginAnimation(RotateTransform.AngleProperty, flick);
                 };
                 frame.Unloaded += delegate {
-                    eyelids.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+                    eyelids.BeginAnimation(Eyelids.ClosureProperty, null);
                     tailAngle.BeginAnimation(RotateTransform.AngleProperty, null);
                 };
             }
 
             return view;
+        }
+
+        // The camera sees an unchanged pupil through a changing opening. Each lid's warm
+        // edge is drawn along that exact opening and clipped to the original ivory contour.
+        private sealed class Eyelids : Canvas
+        {
+            internal static readonly DependencyProperty ClosureProperty = DependencyProperty.Register("Closure",
+                typeof(double), typeof(Eyelids), new PropertyMetadata(0.0, (d, e) => ((Eyelids)d).Update()));
+            private readonly Eye left, right;
+            private double smile;
+
+            internal Eyelids(Canvas source, TranslateTransform gaze)
+            {
+                var l = (Path)source.Children[0];
+                var r = (Path)source.Children[1];
+                var lp = (Path)source.Children[2];
+                var rp = (Path)source.Children[3];
+                source.Children.Clear();
+                left = new Eye(this, l, lp, gaze);
+                right = new Eye(this, r, rp, gaze);
+                source.Children.Add(this);
+            }
+
+            internal void Set(double closed, double smiling)
+            {
+                double previousSmile = smile;
+                smile = smiling;
+                if (closed != (double)GetValue(ClosureProperty)) SetValue(ClosureProperty, closed);
+                else if (closed > 0 && previousSmile != smile) Update();
+            }
+
+            private void Update()
+            {
+                double closed = (double)GetValue(ClosureProperty);
+                left.Set(closed, smile);
+                right.Set(closed, smile);
+            }
+
+            private sealed class Eye
+            {
+                private readonly Canvas image = new Canvas();
+                private readonly Path edge;
+                private readonly Rect bounds;
+                private readonly PathFigure opening = new PathFigure { IsClosed = true };
+                private readonly BezierSegment upper = new BezierSegment(), lower = new BezierSegment();
+                private readonly PathGeometry aperture = new PathGeometry();
+
+                internal Eye(Canvas parent, Path ivory, Path pupil, TranslateTransform gaze)
+                {
+                    bounds = ivory.Data.Bounds;
+                    if (gaze != null) pupil.RenderTransform = gaze;
+                    image.Children.Add(ivory);
+                    image.Children.Add(pupil);
+                    parent.Children.Add(image);
+                    opening.Segments.Add(upper);
+                    opening.Segments.Add(lower);
+                    aperture.Figures.Add(opening);
+                    edge = new Path { Data = aperture, Clip = ivory.Data, Stroke = ivory.Stroke,
+                        StrokeThickness = ivory.StrokeThickness, StrokeLineJoin = PenLineJoin.Round, Visibility = Visibility.Hidden };
+                    parent.Children.Add(edge);
+                }
+
+                internal void Set(double closed, double smile)
+                {
+                    if (closed <= .001)
+                    {
+                        image.Clip = null;
+                        edge.Visibility = Visibility.Hidden;
+                        return;
+                    }
+                    if (closed > .992) closed = 1;
+                    double cx = bounds.X + bounds.Width / 2, cy = bounds.Y + bounds.Height * .54;
+                    double rx = bounds.Width * .5, ry = bounds.Height * .5;
+                    double span = rx * (1.31 - .48 * closed * closed);
+                    double curve = cy + closed * (11 - 32 * smile);
+                    double up = curve - ry * 1.80 * Math.Pow(1 - closed, 1.45);
+                    double down = curve + ry * 1.65 * Math.Pow(1 - closed, .88);
+                    Point a = new Point(cx - span, cy + 2), b = new Point(cx + span, cy - 2);
+                    opening.StartPoint = a;
+                    upper.Point1 = new Point(cx - .92 * span, up + 2);
+                    upper.Point2 = new Point(cx + .92 * span, up - 2);
+                    upper.Point3 = b;
+                    lower.Point1 = new Point(cx + .92 * span, down - 2);
+                    lower.Point2 = new Point(cx - .92 * span, down + 2);
+                    lower.Point3 = a;
+                    image.Clip = aperture;
+                    edge.Visibility = Visibility.Visible;
+                }
+            }
         }
 
         private static void MarkEar(Canvas layer, FrameworkElement anchor, double x, double y)
