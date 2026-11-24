@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
@@ -78,6 +79,13 @@ namespace Xiaohei
         private Planner planner;
         private Forms.NotifyIcon tray;
         private ContextMenu trayMenu;
+        private KeyboardActivity input;
+        private IntPtr sessionWindow;
+        private bool sessionLocked, sessionDisconnected, suspended;
+        [DllImport("wtsapi32.dll")]
+        private static extern bool WTSRegisterSessionNotification(IntPtr window, uint flags);
+        [DllImport("wtsapi32.dll")]
+        private static extern bool WTSUnRegisterSessionNotification(IntPtr window);
         private readonly DispatcherTimer reminderTimer = new DispatcherTimer();
         private DateTime previousReminderTime;
         private bool reminderSaveFailed;
@@ -102,8 +110,6 @@ namespace Xiaohei
             Topmost = true;
             WindowStartupLocation = WindowStartupLocation.Manual;
             Cursor = Cursors.Hand;
-            ToolTip = Hint;
-            ToolTipService.SetInitialShowDelay(this, 600);
             AutomationProperties.SetName(this, "罗小黑桌面宠物");
             AutomationProperties.SetHelpText(this, Hint);
             Content = actor;
@@ -114,6 +120,21 @@ namespace Xiaohei
             open.Click += delegate { ShowPlanner(); };
             menu.Items.Add(open);
             menu.Items.Add(CreateSizeMenu());
+            var keyLabels = new MenuItem { Header = "显示按下的键", IsCheckable = true, IsChecked = !store.HideKeyLabels };
+            keyLabels.Click += delegate
+            {
+                bool previous = store.HideKeyLabels;
+                store.HideKeyLabels = !keyLabels.IsChecked;
+                actor.EndTyping();
+                try { store.Save(); }
+                catch (Exception error)
+                {
+                    store.HideKeyLabels = previous;
+                    keyLabels.IsChecked = !previous;
+                    PetApp.ShowError(this, Title, "按键显示设置未能保存。\n" + error.Message);
+                }
+            };
+            menu.Items.Add(keyLabels);
             var greet = new MenuItem { Header = "让小黑喵一声" };
             greet.Click += delegate { actor.Meow(); };
             menu.Items.Add(greet);
@@ -132,8 +153,11 @@ namespace Xiaohei
             {
                 var source = (HwndSource)PresentationSource.FromVisual(this);
                 source.AddHook(OnDisplayMessage);
+                input = KeyboardActivity.Register(source.Handle, actor);
+                if (WTSRegisterSessionNotification(source.Handle, 0)) sessionWindow = source.Handle;
                 RestoreLocation();
             };
+            IsVisibleChanged += delegate { if (!IsVisible && input != null) input.Reset(); };
             previousReminderTime = store.Now;
             store.Changed += UpdateBadge;
             reminderTimer.Tick += delegate { RefreshReminders(); };
@@ -289,8 +313,36 @@ namespace Xiaohei
 
         private IntPtr OnDisplayMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
+            if (message == KeyboardActivity.InputMessage && input != null && IsVisible &&
+                !sessionLocked && !sessionDisconnected && !suspended)
+            {
+                input.Receive(lParam, !store.HideKeyLabels);
+                // Leave the message unhandled so Windows can clean up foreground raw input.
+                return IntPtr.Zero;
+            }
             const int wmDisplayChange = 0x007E, wmSettingChange = 0x001A, spiSetWorkArea = 0x002F;
             const int wmTimeChange = 0x001E, wmPowerBroadcast = 0x0218;
+            const int wmInputDeviceChange = 0x00FE, wmSessionChange = 0x02B1;
+            long reason = wParam.ToInt64();
+            if (message == wmSessionChange || message == wmPowerBroadcast)
+            {
+                if (message == wmSessionChange)
+                {
+                    if (reason == 7 || reason == 6) sessionLocked = true;
+                    if (reason == 8 || reason == 5) sessionLocked = false;
+                    if (reason == 2 || reason == 4) sessionDisconnected = true;
+                    if (reason == 1 || reason == 3) sessionDisconnected = false;
+                }
+                else if (reason == 4) suspended = true;
+                else if (reason == 7 || reason == 18) suspended = false;
+                if (sessionLocked || sessionDisconnected || suspended)
+                {
+                    if (input != null) input.Reset();
+                    actor.SetSessionActive(false);
+                }
+                else actor.SetSessionActive(true);
+            }
+            if (message == wmInputDeviceChange && reason == 2 && input != null) input.Reset();
             if (message == wmTimeChange || (message == wmPowerBroadcast && (wParam.ToInt64() == 7 || wParam.ToInt64() == 18)))
                 Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate { if (IsVisible) RefreshReminders(); }));
             if (message == wmDisplayChange || (message == wmSettingChange && wParam.ToInt64() == spiSetWorkArea))
@@ -517,10 +569,16 @@ namespace Xiaohei
                 if (planner != null) e.Cancel = true;
             }
             base.OnClosing(e);
+            if (!e.Cancel && sessionWindow != IntPtr.Zero)
+            {
+                WTSUnRegisterSessionNotification(sessionWindow);
+                sessionWindow = IntPtr.Zero;
+            }
         }
 
         protected override void OnClosed(EventArgs e)
         {
+            if (input != null) input.Dispose();
             reminderTimer.Stop();
             store.Changed -= UpdateBadge;
             if (tray != null)

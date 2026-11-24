@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
@@ -10,12 +11,24 @@ namespace Xiaohei
 {
     internal sealed class PetActor : Grid
     {
-        private readonly DispatcherTimer idle = new DispatcherTimer { Interval = TimeSpan.FromMinutes(2) };
+        private readonly DispatcherTimer idle = new DispatcherTimer { Interval = TimeSpan.FromSeconds(28) };
         private readonly DispatcherTimer hover = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(380) };
         private readonly DispatcherTimer finish = new DispatcherTimer();
         private readonly DispatcherTimer tailTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        private const int TypingPauseMs = 800;
+        private const int StrokeIntervalMs = 84;
+        private readonly Stopwatch sinceStroke = new Stopwatch();
+        private readonly Stopwatch clock = Stopwatch.StartNew();
+        private readonly DispatcherTimer frames = new DispatcherTimer(DispatcherPriority.Render);
+        private readonly PetArt.CompanionMotion companion = new PetArt.CompanionMotion();
+        private readonly PetPointer pointer = new PetPointer();
+        private double lastFrame, lastKey = -10;
+        private int heldButtons;
+        private bool sessionActive = true;
+        private PetArt.TypingKeyboard typingKeyboard;
         private bool jumpAfterWave;
         private bool tailAfterSpirits;
+        private bool automaticTailPlaying;
         private bool idleExpired;
         private readonly Decorator drawing = new Decorator();
         private FrameworkElement earAnchor;
@@ -38,28 +51,39 @@ namespace Xiaohei
             AutomationProperties.SetAutomationId(badge, "PendingBadge");
             Children.Add(badge);
             SizeChanged += delegate { SizeBadge(); };
+            frames.Tick += AdvanceMotion;
+            IsVisibleChanged += delegate { ScheduleFrames(); };
             SetPose(PetPose.Rest);
             Loaded += delegate
             {
                 tailAfterSpirits = false;
                 if (Pose != PetPose.Rest) SetPose(PetPose.Rest);
+                if (!sessionActive) return;
                 TrackEarIfMoving();
                 RecordActivity();
+                ScheduleFrames();
                 tailTimer.Start();
             };
-            Unloaded += delegate { idle.Stop(); hover.Stop(); finish.Stop(); tailTimer.Stop(); TrackEar(false); };
+            Unloaded += delegate
+            {
+                idle.Stop(); hover.Stop(); finish.Stop(); tailTimer.Stop(); frames.Stop(); TrackEar(false);
+                heldButtons = 0;
+                pointer.Reset();
+            };
             tailTimer.Tick += delegate
             {
                 if (Pose == PetPose.SpiritOrbit) tailAfterSpirits = true;
-                else Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs);
+                else if (Pose == PetPose.Rest && heldButtons == 0)
+                    Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs, true);
             };
             hover.Tick += delegate
             {
                 hover.Stop();
-                if (Pose == PetPose.Rest) Act(PetPose.Tilt, 1150);
+                if (Pose == PetPose.Rest) { Act(PetPose.Tilt, 1320); companion.Peek(); }
             };
             idle.Tick += delegate
             {
+                if (heldButtons != 0 || (typingKeyboard != null && typingKeyboard.IsKeyHeld)) return;
                 idle.Stop();
                 hover.Stop();
                 idleExpired = true;
@@ -67,11 +91,12 @@ namespace Xiaohei
             };
             finish.Tick += delegate
             {
+                if (Pose == PetPose.Typing && typingKeyboard.IsKeyHeld) return;
                 finish.Stop();
                 if (tailAfterSpirits)
                 {
                     tailAfterSpirits = false;
-                    Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs);
+                    Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs, true);
                 }
                 else if (Pose == PetPose.Wave && jumpAfterWave) Act(PetPose.Hop, 630);
                 else SetPose(idleExpired ? PetPose.Nap : PetPose.Rest);
@@ -80,11 +105,38 @@ namespace Xiaohei
 
         private void SetPose(PetPose pose)
         {
+            if (typingKeyboard != null) typingKeyboard.Rest();
             Pose = pose;
             earAnchor = new FrameworkElement { IsHitTestVisible = false };
-            drawing.Child = PetArt.Draw(true, pose, earAnchor);
+            typingKeyboard = pose == PetPose.Typing ? new PetArt.TypingKeyboard(SystemParameters.ClientAreaAnimation) : null;
+            drawing.Child = PetArt.Draw(true, pose, earAnchor, typingKeyboard, companion);
+            ScheduleFrames();
             TrackEarIfMoving();
             InvalidateArrange();
+        }
+
+        private void ScheduleFrames()
+        {
+            if (!sessionActive || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation ||
+                (Pose != PetPose.Rest && Pose != PetPose.Tilt && Pose != PetPose.Typing && Pose != PetPose.Nap))
+            {
+                frames.Stop();
+                return;
+            }
+            frames.Interval = TimeSpan.FromMilliseconds(Pose == PetPose.Nap ? 80 : 33);
+            if (frames.IsEnabled) return;
+            lastFrame = clock.Elapsed.TotalSeconds;
+            frames.Start();
+        }
+
+        private void AdvanceMotion(object sender, EventArgs e)
+        {
+            double now = clock.Elapsed.TotalSeconds;
+            double dt = Math.Min(.1, now - lastFrame);
+            lastFrame = now;
+            companion.Tick(dt, pointer.GazeX, pointer.GazeY, pointer.Speed);
+            pointer.Decay(dt);
+            PlaceBadge();
         }
 
         internal void ShowPendingCount(int count)
@@ -131,7 +183,7 @@ namespace Xiaohei
         private void TrackEarIfMoving()
         {
             TrackEar(IsLoaded && badge.Visibility == Visibility.Visible &&
-                (Pose == PetPose.Tilt || Pose == PetPose.Hop));
+                Pose == PetPose.Hop);
         }
 
         private void TrackEar(bool enabled)
@@ -150,11 +202,12 @@ namespace Xiaohei
             Play(pose, milliseconds);
         }
 
-        private void Play(PetPose pose, int milliseconds)
+        private void Play(PetPose pose, int milliseconds, bool automaticTail = false)
         {
             hover.Stop();
             finish.Stop();
             SetPose(pose);
+            automaticTailPlaying = automaticTail;
             finish.Interval = TimeSpan.FromMilliseconds(milliseconds);
             finish.Start();
         }
@@ -164,21 +217,118 @@ namespace Xiaohei
             idleExpired = false;
             idle.Stop();
             idle.Start();
+            companion.ResetIdle();
+        }
+
+        internal void TapKeyboard(string key = null, bool privateInput = false, bool held = false)
+        {
+            if (!sessionActive || !IsLoaded || !IsVisible) return;
+            RecordActivity();
+            if (Pose == PetPose.Typing)
+            {
+                finish.Stop();
+                finish.Start();
+            }
+            else
+            {
+                if (Pose != PetPose.Rest && Pose != PetPose.Nap && Pose != PetPose.Tilt &&
+                    !(Pose == PetPose.TailKittens && automaticTailPlaying)) return;
+                Play(PetPose.Typing, TypingPauseMs);
+                if (heldButtons != 0) typingKeyboard.Mouse(pointer.MouseX, pointer.MouseY, heldButtons, 0);
+            }
+            bool newStroke = !sinceStroke.IsRunning || sinceStroke.ElapsedMilliseconds >= StrokeIntervalMs;
+            lastKey = clock.Elapsed.TotalSeconds;
+            // Always retarget the keycap, even while a previous paw stroke is in flight.
+            typingKeyboard.Press(key, newStroke);
+            if (held && key != null && !privateInput) typingKeyboard.Hold(key);
+            if (privateInput) companion.PrivateInput();
+            if (newStroke) sinceStroke.Restart();
+        }
+
+        internal void ReleaseKeyboard(string key)
+        {
+            if (typingKeyboard == null || !typingKeyboard.IsKeyHeld) return;
+            typingKeyboard.Release(key);
+            if (typingKeyboard.IsKeyHeld || Pose != PetPose.Typing) return;
+            finish.Stop();
+            finish.Start();
+        }
+
+        internal void PointerActivity(int dx, int dy, int buttons, int wheel)
+        {
+            if (!sessionActive || !IsLoaded || !IsVisible || ActualWidth <= 0 || ActualHeight <= 0 ||
+                PresentationSource.FromVisual(this) == null) return;
+            double now = clock.Elapsed.TotalSeconds;
+            int down = buttons & 7;
+            heldButtons = (heldButtons | down) & ~((buttons >> 3) & 7);
+            var cursor = System.Windows.Forms.Cursor.Position;
+            var bounds = System.Windows.Forms.Screen.FromPoint(cursor).Bounds;
+            var screen = new Point(cursor.X, cursor.Y);
+            double jitter = now - lastKey < .5 ? Math.Max(8, bounds.Width * .015) : Pose == PetPose.Nap ? 7 : 3;
+            bool moved = pointer.Sample(screen, new Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height),
+                PointFromScreen(screen), RenderSize, now, dx, dy, (buttons | heldButtons) != 0 || wheel != 0, jitter);
+            if (!moved && buttons == 0 && wheel == 0) return;
+            Touch();
+            if (pointer.Petting)
+            {
+                companion.Pet();
+                return;
+            }
+            if (typingKeyboard == null) return;
+            if (down != 0 && (heldButtons & down) != down)
+                typingKeyboard.Mouse(pointer.MouseX, pointer.MouseY, heldButtons | down, 0);
+            typingKeyboard.Mouse(pointer.MouseX, pointer.MouseY, heldButtons, wheel);
+            if (down != 0 || wheel != 0) companion.Pulse(1);
+        }
+
+        internal void EndTyping()
+        {
+            if (Pose != PetPose.Typing) return;
+            finish.Stop();
+            SetPose(PetPose.Rest);
+        }
+
+        internal void ResetTransientInput()
+        {
+            heldButtons = 0;
+            lastKey = -10;
+            pointer.Reset();
+            EndTyping();
+            if (sessionActive && IsLoaded && IsVisible && Pose != PetPose.Nap) RecordActivity();
+        }
+
+        internal void SetSessionActive(bool active)
+        {
+            if (sessionActive == active) return;
+            sessionActive = active;
+            if (!active)
+            {
+                idle.Stop(); hover.Stop(); finish.Stop(); tailTimer.Stop(); frames.Stop(); TrackEar(false);
+                SetPose(PetPose.Rest);
+            }
+            else if (IsLoaded && IsVisible)
+            {
+                RecordActivity();
+                tailTimer.Start();
+                ScheduleFrames();
+            }
         }
 
         internal void Touch()
         {
+            if (!sessionActive) return;
             RecordActivity();
             if (Pose == PetPose.Nap) Act(PetPose.Stretch, 1140);
         }
 
         internal void Enter()
         {
+            if (!sessionActive) return;
             Touch();
             if (Pose == PetPose.Rest) hover.Start();
         }
 
-        internal void Leave() { hover.Stop(); }
+        internal void Leave() { hover.Stop(); pointer.ResetStroke(); }
 
         internal void Celebrate(bool dayComplete)
         {

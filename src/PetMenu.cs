@@ -134,16 +134,6 @@ namespace Xiaohei
             {
                 return Locate(size, pet, pet, null);
             };
-
-            var petHint = new ToolTip { Placement = PlacementMode.Custom, PlacementTarget = pet,
-                Content = new TextBlock { Text = (string)pet.ToolTip, TextWrapping = TextWrapping.Wrap, MaxWidth = 210 },
-                FontFamily = menu.FontFamily, Foreground = menu.Foreground, FontSize = 11.5,
-                Template = HintTemplate, CustomPopupPlacementCallback = menu.CustomPopupPlacementCallback };
-            ToolTipService.SetPlacement(pet, PlacementMode.Custom);
-            ToolTipService.SetPlacementTarget(pet, pet);
-            pet.ToolTip = petHint;
-            menu.Opened += delegate { ToolTipService.SetIsEnabled(pet, false); petHint.IsOpen = false; };
-            menu.Closed += delegate { ToolTipService.SetIsEnabled(pet, true); };
         }
 
         private static void StyleItems(ItemsControl parent, ContextMenu root, Window pet)
