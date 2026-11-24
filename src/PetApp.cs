@@ -98,6 +98,9 @@ namespace Xiaohei
             var kittens = new MenuItem { Header = "尾巴变小猫" };
             kittens.Click += delegate { actor.SplitTail(); };
             menu.Items.Add(kittens);
+            var spirits = new MenuItem { Header = "白色小精灵围绕" };
+            spirits.Click += delegate { actor.WatchSpirits(); };
+            menu.Items.Add(spirits);
             var exit = new MenuItem { Header = "退出小黑" };
             exit.Click += delegate { Close(); };
             menu.Items.Add(exit);
