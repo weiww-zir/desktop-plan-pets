@@ -15,8 +15,8 @@ namespace Xiaohei
 <ResourceDictionary xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
                     xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>
     <Style x:Key='Surface' TargetType='Border'>
-        <Setter Property='Background' Value='#FCFDF9'/>
-        <Setter Property='BorderBrush' Value='#9AB29C'/>
+        <Setter Property='Background' Value='#FBF5E9'/>
+        <Setter Property='BorderBrush' Value='#BEAF96'/>
         <Setter Property='BorderThickness' Value='1'/>
         <Setter Property='CornerRadius' Value='14'/>
         <Setter Property='Padding' Value='5'/>
@@ -84,8 +84,14 @@ namespace Xiaohei
             <ContentPresenter/>
         </Border>
     </ControlTemplate>
+    <ControlTemplate x:Key='TaskHintSkin' TargetType='ToolTip'>
+        <Border Background='#D6DFD4' BorderBrush='#8C9F90' BorderThickness='1' CornerRadius='8' Padding='9,5'>
+            <ContentPresenter/>
+        </Border>
+    </ControlTemplate>
 </ResourceDictionary>");
 
+        internal static ControlTemplate TaskHintTemplate { get { return (ControlTemplate)Skin["TaskHintSkin"]; } }
         internal static ControlTemplate HintTemplate { get { return (ControlTemplate)Skin["HintSkin"]; } }
 
         internal static void ApplySurface(ContextMenu menu, Window pet)
@@ -112,7 +118,7 @@ namespace Xiaohei
 
             var petHint = new ToolTip { Placement = PlacementMode.Custom, PlacementTarget = pet,
                 Content = new TextBlock { Text = (string)pet.ToolTip, TextWrapping = TextWrapping.Wrap, MaxWidth = 210 },
-                FontFamily = menu.FontFamily, Foreground = menu.Foreground, FontSize = 12,
+                FontFamily = menu.FontFamily, Foreground = menu.Foreground, FontSize = 11.5,
                 Template = HintTemplate, CustomPopupPlacementCallback = menu.CustomPopupPlacementCallback };
             ToolTipService.SetPlacement(pet, PlacementMode.Custom);
             ToolTipService.SetPlacementTarget(pet, pet);

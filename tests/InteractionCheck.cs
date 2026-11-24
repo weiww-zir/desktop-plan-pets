@@ -23,6 +23,7 @@ namespace Xiaohei
         const string second = "选两处原文补进读书笔记，并写下自己对结尾的理解";
         const string third = "和同学确认引用的内容";
         const string fourth = "周末一起读完下一章";
+        const string longChild = "依次核对每一处引文的页码和译文，再将出处补充到书目末尾";
         static void Check(bool result, string description)
         {
             if (!result) throw new InvalidOperationException(description);
@@ -64,7 +65,7 @@ namespace Xiaohei
                 new XElement("Title",title),new XElement("Notes",first+"\n\n"+second)));
             for (int i = 1; i <= 16; i++)
                 tasks.Add(new XElement("Task",new XAttribute("id","note"+i),new XAttribute("day",day),
-                    new XAttribute("done",false),new XElement("Title","校对第"+i+"页摘录"), new XElement("Notes","")));
+                    new XAttribute("done",false),new XElement("Title","校对第"+i+"页摘录"), new XElement("Notes",i == 1 ? longChild : "")));
             new XDocument(new XElement("Planner",new XAttribute("version","1"),tasks,new XElement("Weeks"),
                 new XElement("Size",new XAttribute("plannerWidth",310),new XAttribute("plannerHeight",310))))
                 .Save(Path.Combine(folder,"planner.xml"));
@@ -75,13 +76,34 @@ namespace Xiaohei
             return new Store(folder).Tasks.Single(x=>x.Id=="reading");
         }
 
+        static void CheckDraftOutline(Planner planner, TextBox field)
+        {
+            var inputFrame = (Border)field.Template.FindName("field", field);
+            DependencyObject parent = VisualTreeHelper.GetParent(field);
+            while (parent != null && !(parent is Border)) parent = VisualTreeHelper.GetParent(parent);
+            var outer = parent as Border;
+            Check(field.IsKeyboardFocused && inputFrame.BorderThickness == new Thickness(0) &&
+                field.FocusVisualStyle == null && outer != null && outer.BorderThickness == new Thickness(1) &&
+                outer.CornerRadius.TopLeft > 0, "focused subtask editor has one rounded outer outline");
+            var active = outer.BorderBrush;
+            Find<Button>(planner).Single(b => (b.Content as string) == "日历计划").Focus();
+            Check(!outer.IsKeyboardFocusWithin && !Equals(outer.BorderBrush, active) && inputFrame.BorderThickness == new Thickness(0),
+                "keyboard focus changes the existing outline without adding an inner one");
+            field.Focus();
+        }
+
         static void AddStep(Planner planner, string step)
         {
-            Click(planner,"添加子任务："+title);
+            var more = Find<Button>(planner).Single(b => AutomationProperties.GetName(b) == "任务操作：" + title);
+            more.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            more.ContextMenu.Items.OfType<MenuItem>().Single(item => (string)item.Header == "添加子任务")
+                .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            planner.UpdateLayout();
             Settle();
             var box=Find<TextBox>(planner).Single(x=>AutomationProperties.GetName(x)=="子任务名称");
             Check(planner.OwnedWindows.Count==0 && box.IsKeyboardFocused,
                 "add-subtask focuses an inline field in the same planner");
+            CheckDraftOutline(planner, box);
             box.Text=step;
             Click(planner,"保存子任务");
             Settle();
@@ -108,7 +130,7 @@ namespace Xiaohei
             return pixels;
         }
 
-        static bool AllowsHover(Border row)
+        static bool AllowsHover(FrameworkElement row)
         {
             // WPF keeps this event-args constructor internal. Raise the actual tooltip-service
             // preview event without moving the system pointer or synthesizing mouse input.
@@ -116,7 +138,17 @@ namespace Xiaohei
                 System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic,null,
                 new object[]{true},CultureInfo.InvariantCulture);
             row.RaiseEvent(args);
-            return !args.Handled;
+            return row.ToolTip is ToolTip && ToolTipService.GetIsEnabled(row) && !args.Handled;
+        }
+
+        static FrameworkElement HoverOwner(FrameworkElement element)
+        {
+            for (DependencyObject node = element; node != null; node = VisualTreeHelper.GetParent(node))
+            {
+                var owner = node as FrameworkElement;
+                if (owner != null && owner.ToolTip != null) return owner;
+            }
+            return null;
         }
 
         static void Hover(Planner planner, string path)
@@ -124,27 +156,64 @@ namespace Xiaohei
             var row = Find<Border>(planner).Single(x=>AutomationProperties.GetName(x)=="任务详情："+title);
             row.BringIntoView();
             Settle();
-            var tip = row.ToolTip as ToolTip;
-            var shortRow = Find<Border>(planner).Single(x=>AutomationProperties.GetName(x)=="任务详情：校对第1页摘录");
-            shortRow.BringIntoView();
+            var parent = Find<Button>(row).Single(b => AutomationProperties.GetName(b) == "编辑任务：" + title);
+            var shortChild = HoverOwner(Find<TextBlock>(row).Single(t => t.Text == first));
+            var child = HoverOwner(Find<TextBlock>(row).Single(t => t.Text == second));
+            var other = Find<Border>(planner).Single(b => AutomationProperties.GetName(b) == "任务详情：校对第1页摘录");
+            var shortParent = Find<Button>(other).Single(b => AutomationProperties.GetName(b) == "编辑任务：校对第1页摘录");
+            var otherChild = HoverOwner(Find<TextBlock>(other).Single(t => t.Text == longChild));
+            Check(AllowsHover(parent) && AllowsHover(child) && !AllowsHover(shortChild) &&
+                !AllowsHover(shortParent) && AllowsHover(otherChild), "each parent or child checks only its own title for ellipsis");
+            Check(row.ToolTip == null && Find<CheckBox>(row).All(c => c.ToolTip == null) &&
+                Find<Button>(row).Single(b => AutomationProperties.GetName(b) == "任务操作：" + title).ToolTip == null,
+                "card, checkboxes and overflow button do not show task details");
+            foreach (var target in new FrameworkElement[] { parent, child })
+            {
+                target.BringIntoView();
+                Settle();
+                var text = Find<TextBlock>(target).Single();
+                double textTop = text.TranslatePoint(new Point(), target).Y;
+                // The center of the padding above the text belongs to the row;
+                // a point near its upper-right corner can be outside its rounded button.
+                var point = new Point(target.ActualWidth / 2, textTop / 2);
+                var hit = planner.InputHitTest(target.TranslatePoint(point, planner)) as FrameworkElement;
+                var owner = hit == null ? null : HoverOwner(hit);
+                int delay = ToolTipService.GetInitialShowDelay(target);
+                Check(textTop > 0 && owner == target && delay == 700, String.Format(CultureInfo.InvariantCulture,
+                    "central blank text area hits its delayed tooltip: target={0}, size={1}, local={2}, textTop={3:F2}, hit={4}, owner={5}, delay={6}",
+                    target.GetType().Name, target.RenderSize, point, textTop, hit == null ? "none" : hit.GetType().Name,
+                    owner == null ? "none" : owner.GetType().Name, delay));
+            }
+            var viewport = Find<ScrollViewer>(planner).First(x => x.ScrollableHeight > 0);
+            viewport.ScrollToEnd();
             Settle();
-            bool shortOpens = AllowsHover(shortRow);
+            Check(other.TranslatePoint(new Point(), viewport).Y < 0 && !AllowsHover(shortParent),
+                "scrolling a short title outside the viewport never makes it eligible");
             row.BringIntoView();
             Settle();
-            Check(tip != null && ToolTipService.GetIsEnabled(row) && AllowsHover(row) && !shortOpens,
-                "tooltip opens for truncated information and stays closed for short rows");
-            Check(!Find<Button>(row).Any(x=>Convert.ToString(x.ToolTip).StartsWith("编辑任务")),
-                "editable row does not advertise an edit-action tooltip");
-            tip.PlacementTarget = row;
+            var parentTip = (ToolTip)parent.ToolTip;
+            parentTip.IsOpen = true;
+            Settle();
+            Check(Find<TextBlock>(parentTip).Select(t => t.Text).SequenceEqual(new[] { title }),
+                "parent tooltip displays only its full title");
+            double narrow = planner.Width;
+            planner.Width = 760;
+            Settle();
+            Check(!parentTip.IsOpen && !AllowsHover(parent) && !AllowsHover(child), "widening closes a full-width title's tip and prevents reopening");
+            planner.Width = narrow;
+            Settle();
+            Check(AllowsHover(child), "narrowing makes the truncated child eligible again");
+            var tip = (ToolTip)child.ToolTip;
             tip.IsOpen = true;
             Settle(200);
             var source = PresentationSource.FromVisual(tip) as HwndSource;
-            Check(source != null && source.Handle != IntPtr.Zero, "details tooltip opens in its own popup");
-            var detail = String.Join("\n",Find<TextBlock>(tip).Select(x=>x.Text));
-            Check(new[]{title,first,second,third,fourth}.All(detail.Contains),"hover reveals full task and all four step texts");
-            Check(detail.Contains("☑ "+first) && detail.Contains("☐ "+second),
-                "expanded details reflect current checked and unchecked states");
-            var viewport = Find<ScrollViewer>(planner).First(x => x.ScrollableHeight > 0);
+            Check(source != null && source.Handle != IntPtr.Zero && tip.PlacementTarget == child &&
+                tip.Placement == PlacementMode.Custom && tip.CustomPopupPlacementCallback != null,
+                "the child uses a real popup anchored to its own text region with custom placement");
+            Check(Find<TextBlock>(tip).Select(t => t.Text).SequenceEqual(new[] { second }),
+                "child tooltip displays only its full title without completion marks or sibling text");
+            var fill = Find<Border>(tip).Select(b => b.Background as SolidColorBrush).First(b => b != null);
+            Check(fill.Color == Color.FromRgb(214,223,212), "the rendered tooltip uses its gray-green surface");
             viewport.ScrollToVerticalOffset(viewport.VerticalOffset + row.TranslatePoint(new Point(),viewport).Y - 3);
             Settle();
             var surface = (FrameworkElement)planner.Content;
@@ -173,7 +242,11 @@ namespace Xiaohei
             var png = new PngBitmapEncoder();
             png.Frames.Add(BitmapFrame.Create(image));
             using(var stream=File.Create(path)) png.Save(stream);
-            tip.IsOpen = false;
+            Click(planner,"日历计划");
+            Settle();
+            Check(!tip.IsOpen && PresentationSource.FromVisual(child) == null &&
+                tip.CustomPopupPlacementCallback(new Size(160, 35), child.RenderSize, new Point()).Length > 0,
+                "changing views dismisses the old title tooltip and late placement tolerates a detached target");
         }
 
         static void FitAndScroll(Planner planner, DesktopPet pet, string folder)
@@ -191,6 +264,9 @@ namespace Xiaohei
             var header = Find<TextBlock>(planner).Single(x=>x.Text=="小黑手帐");
             var args = new MouseButtonEventArgs(Mouse.PrimaryDevice,Environment.TickCount,MouseButton.Left)
                 { RoutedEvent=Control.PreviewMouseDoubleClickEvent, Source=header };
+            // The crowded list can already occupy all available height on open.
+            planner.Height = planner.MinHeight;
+            Settle();
             var oldHeight = planner.ActualHeight;
             planner.RaiseEvent(args);
             Settle();
@@ -220,6 +296,11 @@ namespace Xiaohei
                 var pet = new DesktopPet(new Store(folder,delegate { return sessionDay; })) {ShowActivated=false};
                 pet.Show(); pet.ShowPlanner(); Settle();
                 var planner = pet.OwnedWindows.OfType<Planner>().Single();
+                Click(planner,"＋ 新建任务");
+                Click(planner,"添加子任务");
+                var notes = Find<TextBox>(planner).Single(x => AutomationProperties.GetName(x) == "子任务（每行一项）");
+                CheckDraftOutline(planner, notes);
+                Click(planner,"取消");
                 AddStep(planner,third);
                 Toggle(planner,"完成子任务："+first,true);
                 var task = Read(folder);
@@ -236,7 +317,6 @@ namespace Xiaohei
                 Toggle(planner,"完成子任务："+second,false);
                 Check(!Read(folder).Done,"reopening a weekly step reopens its parent");
                 Hover(planner,Path.Combine(args[0],"NewInteractions.png"));
-                Click(planner,"日历计划");
                 Check(Find<CheckBox>(planner).Single(x=>AutomationProperties.GetName(x)=="完成子任务："+second)
                     .IsChecked==false,"weekly step change appears in daily view");
                 FitAndScroll(planner,pet,folder);

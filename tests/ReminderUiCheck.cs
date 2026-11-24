@@ -160,7 +160,11 @@ namespace Xiaohei
                 var reloaded=new Store(folder,()=>now).Tasks.Single(x=>x.Id==task.Id);
                 Check(reloaded.Title==renamed && reloaded.Steps.Single().Title=="核对两条引文",
                     "parent and child renames survive disk reload");
-                Click(planner,"添加子任务："+renamed);
+                var more = Find<Button>(planner).Single(b => AutomationProperties.GetName(b) == "任务操作：" + renamed);
+                more.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                more.ContextMenu.Items.OfType<MenuItem>().Single(item => (string)item.Header == "添加子任务")
+                    .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                planner.UpdateLayout(); Flush();
                 var stepInput=Find<TextBox>(planner).Single(x=>AutomationProperties.GetName(x)=="子任务名称");
                 stepInput.Text="补抄讨论记录";
                 Time(pet,seed.AddHours(18)); Badge(pet,1);

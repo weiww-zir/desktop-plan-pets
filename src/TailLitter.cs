@@ -16,7 +16,6 @@ namespace Xiaohei
             private const double RightPieceWidth = (RightTipX-RightRootX)/2;
             private static readonly Point[] Origins = { new Point(265,418), new Point(RightTipX,417), new Point(RightTipX-RightPieceWidth,417) };
             private static readonly Point[] Landings = { new Point(373,85), new Point(225,453), new Point(522,448) };
-            private static readonly Brush WarmLine = ColorBrush(91,58,42);
             private static readonly Brush BlueMouth = ColorBrush(134,175,177);
             private readonly ScaleTransform leftTipLength = new ScaleTransform(1,1,320,418);
             private readonly ScaleTransform rightTailLength = new ScaleTransform(1,1,RightRootX,418);
@@ -37,7 +36,7 @@ namespace Xiaohei
                 rightTail.RenderTransform = rightTailLength;
                 eyes.Children[2].RenderTransform = eyes.Children[3].RenderTransform = gaze;
                 Children.Add(mouth);
-                Shape(mouth,"M 354,332 Q 359,314 365,309 Q 370,306 378,320 L 382,331 Q 372,336 355,335 Z",BlueMouth,5,WarmLine);
+                Shape(mouth,"M 354,332 Q 359,314 365,309 Q 370,306 378,320 L 382,331 Q 372,336 355,335 Z",BlueMouth,5,FaceLine);
                 for (int i = 0; i < kittens.Length; i++) AddKitten(i);
                 DrawAt(animate ? 0 : 4);
                 if (!animate) return;
@@ -57,20 +56,20 @@ namespace Xiaohei
                 positions[index] = new MatrixTransform();
                 kitten.RenderTransform = positions[index];
                 Children.Add(kitten);
-                Shape(kitten,"M -54,8 C -54,-4 -48,-15 -39,-23 Q -40,-39 -31,-42 Q -23,-44 -14,-33 Q 0,-37 15,-33 Q 26,-45 34,-42 Q 43,-41 40,-24 C 52,-14 57,0 54,15 Q 53,33 32,37 Q 9,42 -23,39 C -44,37 -54,29 -54,8 Z",Ink,7,WarmLine);
+                Shape(kitten,"M -54,8 C -54,-4 -48,-15 -39,-23 Q -40,-39 -31,-42 Q -23,-44 -14,-33 Q 0,-37 15,-33 Q 26,-45 34,-42 Q 43,-41 40,-24 C 52,-14 57,0 54,15 Q 53,33 32,37 Q 9,42 -23,39 C -44,37 -54,29 -54,8 Z",Ink,7,FaceLine);
                 var face = faces[index] = new Canvas();
                 kitten.Children.Add(face);
                 if (index == 0)
                 {
-                    Shape(face,"M -42,6 C -42,-13 -26,-22 -15,-17 C -2,-12 -2,13 -13,23 C -25,32 -42,26 -42,6 Z M 5,5 C 5,-14 20,-22 32,-17 C 46,-12 46,12 35,23 C 20,32 5,25 5,5 Z",Ivory,4,WarmLine);
+                    Shape(face,"M -42,6 C -42,-13 -26,-22 -15,-17 C -2,-12 -2,13 -13,23 C -25,32 -42,26 -42,6 Z M 5,5 C 5,-14 20,-22 32,-17 C 46,-12 46,12 35,23 C 20,32 5,25 5,5 Z",Ivory,4,FaceLine);
                     Shape(face,"M -32,7 C -33,-5 -25,-13 -18,-10 C -8,-6 -10,12 -17,17 C -25,23 -32,18 -32,7 Z M 15,6 C 15,-6 23,-14 30,-10 C 39,-5 38,10 32,17 C 23,22 15,17 15,6 Z",Ink,0);
                 }
                 else if (index == 1)
-                    Shape(face,"M -47,5 Q -32,0 -14,6 M 6,6 Q 23,-2 46,1",null,7,WarmLine);
+                    Shape(face,"M -47,5 Q -32,0 -14,6 M 6,6 Q 23,-2 46,1",null,7,FaceLine);
                 else
                 {
-                    Shape(face,"M -47,-2 Q -31,-2 -13,5 M 4,5 Q 23,-5 47,-5",null,7,WarmLine);
-                    Shape(face,"M -14,12 L 3,12 L -2,30 Z",BlueMouth,4,WarmLine);
+                    Shape(face,"M -47,-2 Q -31,-2 -13,5 M 4,5 Q 23,-5 47,-5",null,7,FaceLine);
+                    Shape(face,"M -14,12 L 3,12 L -2,30 Z",BlueMouth,4,FaceLine);
                 }
             }
 

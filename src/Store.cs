@@ -25,6 +25,7 @@ namespace Xiaohei
         internal TaskItem() { Steps = new List<PlanStep>(); }
 
         public string Id { get; set; }
+        public bool IsLongTerm { get; set; }
         internal TaskSchedule Schedule;
         internal bool PreviouslyDone;
         public string Day
@@ -90,6 +91,9 @@ namespace Xiaohei
         internal double PetWidth = 92;
         internal double PlannerWidth = 356;
         internal double PlannerHeight = 500;
+        internal bool CalendarCollapsed;
+        internal bool LongTermListCollapsed = true;
+        internal bool DayListCollapsed;
         internal bool RecoveredFromBackup { get; private set; }
         internal DateTime Now { get { return clock(); } }
         internal event Action Changed;
@@ -139,10 +143,11 @@ namespace Xiaohei
             return now.Date.AddDays(-offset);
         }
 
-        internal bool IsAlert(TaskItem item) { return !item.Done && item.Schedule.Alert; }
+        internal bool IsAlert(TaskItem item) { return !item.IsLongTerm && !item.Done && item.Schedule.Alert; }
 
         internal bool IsOnDay(TaskItem item, DateTime day, DateTime now)
         {
+            if (item.IsLongTerm) return false;
             string key = DateKey(day);
             return item.Day == key || (now.Hour >= 18 && day.Date == now.Date && item.CarriedFrom == key);
         }
@@ -154,6 +159,7 @@ namespace Xiaohei
 
         internal DateTime? WeekDisplayDay(TaskItem item, DateTime dayInWeek, DateTime now)
         {
+            if (item.IsLongTerm) return null;
             DateTime assigned;
             if (ParseDate(item.Day, out assigned) && MondayKey(assigned) == MondayKey(dayInWeek)) return assigned;
             if (IsOnDay(item, now, now) && MondayKey(now) == MondayKey(dayInWeek)) return now.Date;
@@ -185,7 +191,7 @@ namespace Xiaohei
                 if (root == null || root.Name != "Planner" || root.Attribute("version") == null)
                     throw new FormatException();
                 string version = (string)root.Attribute("version");
-                if (version != "1" && version != "2" && version != "3")
+                if (version != "1" && version != "2" && version != "3" && version != "4")
                     throw new NotSupportedException("计划文件来自其他版本，请使用相应版本打开。" + Environment.NewLine + source);
                 var tasks = root.Element("Tasks");
                 var weekly = root.Element("Weeks");
@@ -195,18 +201,20 @@ namespace Xiaohei
                 var lastWrite = File.GetLastWriteTime(source);
                 foreach (var element in tasks.Elements())
                 {
+                    bool longTerm = version == "4" && element.Name == "LongTermTask";
                     var item = new TaskItem {
-                        Id = (string)element.Attribute("id"), Day = (string)element.Attribute("day"),
+                        Id = (string)element.Attribute("id"), IsLongTerm = longTerm,
+                        Day = longTerm ? null : (string)element.Attribute("day"),
                         Title = (string)element.Element("Title")
                     };
                     bool done;
-                    DateTime date;
-                    if (element.Name != "Task" || String.IsNullOrWhiteSpace(item.Id) || !ids.Add(item.Id)
-                        || String.IsNullOrWhiteSpace(item.Title) || !ParseDate(item.Day, out date)
+                    DateTime date = default(DateTime);
+                    if ((!longTerm && element.Name != "Task") || String.IsNullOrWhiteSpace(item.Id) || !ids.Add(item.Id)
+                        || String.IsNullOrWhiteSpace(item.Title) || (!longTerm && !ParseDate(item.Day, out date))
                         || !Boolean.TryParse((string)element.Attribute("done"), out done))
                         throw new FormatException();
                     item.PreviouslyDone = item.Done = done;
-                    if (version == "3")
+                    if (!longTerm && (version == "3" || version == "4"))
                     {
                         string reviewed = (string)element.Attribute("reviewedFriday");
                         string carried = (string)element.Attribute("carriedFrom");
@@ -220,7 +228,7 @@ namespace Xiaohei
                         item.Schedule.CarriedFrom = carried;
                         item.Schedule.Alert = alert && !done;
                     }
-                    else
+                    else if (!longTerm)
                     {
                         // Older files have no creation timestamp. The last save
                         // and the original planned day are the available anchors.
@@ -270,6 +278,10 @@ namespace Xiaohei
                     PetWidth = ReadSize(size, "petWidth", PetWidth, 50, 240);
                     PlannerWidth = ReadSize(size, "plannerWidth", PlannerWidth, 300, 4096);
                     PlannerHeight = ReadSize(size, "plannerHeight", PlannerHeight, 270, 4096);
+                    Boolean.TryParse((string)size.Attribute("calendarCollapsed"), out CalendarCollapsed);
+                    bool folded;
+                    if (Boolean.TryParse((string)size.Attribute("longTermListCollapsed"), out folded)) LongTermListCollapsed = folded;
+                    Boolean.TryParse((string)size.Attribute("dayListCollapsed"), out DayListCollapsed);
                 }
                 Tasks.AddRange(items);
                 foreach (var note in notes) weeks.Add(note.Key, note.Value);
@@ -324,6 +336,13 @@ namespace Xiaohei
             foreach (var item in Tasks)
             {
                 var before = item.Schedule;
+                if (item.IsLongTerm)
+                {
+                    var unscheduled = default(TaskSchedule);
+                    states.Add(unscheduled);
+                    if (!before.Equals(unscheduled)) changed = true;
+                    continue;
+                }
                 var next = before;
                 bool missedFriday = before.ReviewedFriday != null
                     && String.CompareOrdinal(before.ReviewedFriday, friday) < 0;
@@ -366,13 +385,19 @@ namespace Xiaohei
 
         private void WriteFile(List<TaskSchedule> states)
         {
-            var root = new XElement("Planner", new XAttribute("version", "3"),
+            string version = Tasks.Any(item => item.IsLongTerm) ? "4" : "3";
+            var root = new XElement("Planner", new XAttribute("version", version),
                 new XElement("Size", new XAttribute("petWidth", PetWidth),
-                    new XAttribute("plannerWidth", PlannerWidth), new XAttribute("plannerHeight", PlannerHeight)),
-                new XElement("Tasks", Tasks.Select((item, i) => new XElement("Task",
-                    new XAttribute("id", item.Id), new XAttribute("day", states[i].Day), new XAttribute("done", item.Done),
-                    new XAttribute("reviewedFriday", states[i].ReviewedFriday), new XAttribute("alert", states[i].Alert),
-                    states[i].CarriedFrom == null ? null : new XAttribute("carriedFrom", states[i].CarriedFrom),
+                    new XAttribute("plannerWidth", PlannerWidth), new XAttribute("plannerHeight", PlannerHeight),
+                    new XAttribute("calendarCollapsed", CalendarCollapsed),
+                    new XAttribute("longTermListCollapsed", LongTermListCollapsed), new XAttribute("dayListCollapsed", DayListCollapsed)),
+                new XElement("Tasks", Tasks.Select((item, i) => new XElement(item.IsLongTerm ? "LongTermTask" : "Task",
+                    new XAttribute("id", item.Id), new XAttribute("done", item.Done),
+                    item.IsLongTerm ? null : new[] {
+                        new XAttribute("day", states[i].Day), new XAttribute("reviewedFriday", states[i].ReviewedFriday),
+                        new XAttribute("alert", states[i].Alert),
+                        states[i].CarriedFrom == null ? null : new XAttribute("carriedFrom", states[i].CarriedFrom)
+                    },
                     new XElement("Title", item.Title), new XElement("Steps", item.Steps.Select(step =>
                         new XElement("Step", new XAttribute("done", step.Done), step.Title)))))),
                 new XElement("Weeks", weeks.Select(note => new XElement("Week",

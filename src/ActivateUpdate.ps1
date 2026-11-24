@@ -1,7 +1,8 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿param([switch]$OpenPlanner)
+$ErrorActionPreference = 'Stop'
 $staged = Get-Item -LiteralPath (Join-Path $PSScriptRoot '小黑手帐-更新.exe')
 $target = Get-Item -LiteralPath (Join-Path $PSScriptRoot '..\outputs\小黑手帐.exe')
-if ($staged.VersionInfo.ProductName -ne '小黑手帐' -or $staged.VersionInfo.FileVersion -ne '1.11.3.0') {
+if ($staged.VersionInfo.ProductName -ne '小黑手帐' -or $staged.VersionInfo.FileVersion -ne '1.16.0.0') {
     throw '未找到已验证的新版桌宠。'
 }
 $instances = @(Get-Process -Name '小黑手帐' -ErrorAction SilentlyContinue)
@@ -54,7 +55,9 @@ foreach ($instance in $instances) {
 }
 $backup = Join-Path $PSScriptRoot ('小黑手帐-原版-' + [Guid]::NewGuid().ToString('N') + '.exe')
 [System.IO.File]::Replace($staged.FullName, $target.FullName, $backup)
-$runningPet = Start-Process -FilePath $target.FullName -PassThru
+$launch = @{ FilePath = $target.FullName; PassThru = $true }
+if ($OpenPlanner) { $launch.ArgumentList = '--planner' }
+$runningPet = Start-Process @launch
 if (!$runningPet.WaitForInputIdle(10000)) { throw '桌宠未在预期时间内完成初始化。' }
 Start-Sleep -Milliseconds 800
 $runningPet.Refresh()

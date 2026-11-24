@@ -13,6 +13,7 @@ namespace Xiaohei
         private TextBox draftTitle, draftNotes;
         private TextBlock draftHint;
         private DateTime draftDay;
+        private bool draftLongTerm;
         private bool draftComposing;
         private TaskItem stepParent;
         private Border stepRow;
@@ -42,11 +43,12 @@ namespace Xiaohei
                 DockPanel.SetDock(save, Dock.Right);
                 layout.Children.Add(save);
                 var input = new Grid { Margin = new Thickness(0, 0, 4, 0) };
-                stepTitle = new TextBox { Template = InputSkin, Background = Paper, BorderBrush = Line,
-                    Padding = new Thickness(6, 3, 6, 3), FontSize = 13, VerticalContentAlignment = VerticalAlignment.Center };
+                stepTitle = new TextBox { Template = InputSkin, Background = Brushes.Transparent,
+                    BorderThickness = new Thickness(0), FocusVisualStyle = null,
+                    Padding = new Thickness(6, 3, 6, 3), FontSize = BodySize, VerticalContentAlignment = VerticalAlignment.Center };
                 AutomationProperties.SetName(stepTitle, "子任务名称");
                 input.Children.Add(stepTitle);
-                var hint = Label("输入子任务名称", 12, Muted);
+                var hint = Label("输入子任务名称", BodySize, Muted);
                 hint.IsHitTestVisible = false;
                 hint.Margin = new Thickness(7, 0, 0, 0);
                 input.Children.Add(hint);
@@ -59,7 +61,7 @@ namespace Xiaohei
                     save.Opacity = save.IsEnabled ? 1 : 0.55;
                     hint.Visibility = stepTitle.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
                 };
-                TrackComposition(stepRow);
+                TrackDraftInput(stepRow);
                 stepTitle.PreviewKeyDown += delegate(object sender, KeyEventArgs e)
                 {
                     if (e.Key != Key.Enter || draftComposing || e.IsRepeat) return;
@@ -85,12 +87,11 @@ namespace Xiaohei
                     if (!String.IsNullOrWhiteSpace(line))
                         stepParent.Steps.Add(new PlanStep { Title = line.Trim() });
                 stepParent.Done = false;
-                if (!Persist(this))
+                if (!Persist(this, delegate
                 {
                     stepParent.Steps.RemoveRange(before, stepParent.Steps.Count - before);
                     stepParent.Done = wasDone;
-                    return false;
-                }
+                })) return false;
             }
             ClearStep();
             return true;
@@ -110,18 +111,22 @@ namespace Xiaohei
             Render(false);
         }
 
-        private void TrackComposition(FrameworkElement row)
+        private void TrackDraftInput(Border row)
         {
             TextCompositionManager.AddPreviewTextInputStartHandler(row, delegate { draftComposing = true; });
             TextCompositionManager.AddPreviewTextInputHandler(row, delegate { draftComposing = false; });
-            row.LostKeyboardFocus += delegate { if (!row.IsKeyboardFocusWithin) draftComposing = false; };
+            row.IsKeyboardFocusWithinChanged += delegate {
+                row.BorderBrush = row.IsKeyboardFocusWithin ? Leaf : TodayRing;
+                if (!row.IsKeyboardFocusWithin) draftComposing = false;
+            };
         }
 
-        private void BeginDraft()
+        private void BeginDraft(bool longTerm)
         {
-            if (draftRow == null)
+            if (draftRow == null || draftLongTerm != longTerm)
             {
-                if (!FinishStep(true)) return;
+                if (!FinishOpenEditors()) return;
+                draftLongTerm = longTerm;
                 draftDay = selected;
                 draftRow = CreateDraftRow();
                 Render(false);
@@ -136,28 +141,29 @@ namespace Xiaohei
             var row = new Border { Background = Paper, BorderBrush = TodayRing, BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(9), Padding = new Thickness(9, 6, 9, 6),
                 Margin = new Thickness(0, 8, 0, 3), Child = fields };
-            draftTitle = new TextBox { Template = InputSkin, FontSize = 14, Foreground = Ink, Background = Brushes.Transparent,
+            draftTitle = new TextBox { Template = InputSkin, FontSize = BodySize, MinHeight = 30, Foreground = Ink, Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0), Padding = new Thickness(2, 5, 2, 5) };
             AutomationProperties.SetName(draftTitle, "任务名称");
             var titleLine = new Grid();
             titleLine.Children.Add(draftTitle);
-            var placeholder = Label("输入任务名称", 14, Muted);
+            var placeholder = Label(draftLongTerm ? "输入长期任务名称" : "输入任务名称", BodySize, Muted);
             placeholder.Margin = new Thickness(4, 0, 0, 0);
             placeholder.IsHitTestVisible = false;
             titleLine.Children.Add(placeholder);
             fields.Children.Add(titleLine);
-            draftHint = Label("请先填写任务名称", 12, Paint("#93483F"));
+            draftHint = Label("请先填写任务名称", MetaSize, Paint("#93483F"));
             draftHint.Visibility = Visibility.Collapsed;
             fields.Children.Add(draftHint);
 
-            var stepLabel = Label("子任务（每行一项）", 12, Muted);
+            var stepLabel = Label("子任务（每行一项）", MetaSize, Muted);
             stepLabel.Margin = new Thickness(2, 4, 0, 0);
             stepLabel.Visibility = Visibility.Collapsed;
             fields.Children.Add(stepLabel);
             draftNotes = new TextBox { Template = InputSkin, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinLines = 2,
-                MaxLines = 4, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden, FontSize = 13,
-                Foreground = Ink, Background = Paper, Padding = new Thickness(5, 3, 5, 3),
-                BorderBrush = Line, Margin = new Thickness(1, 4, 1, 6), Visibility = Visibility.Collapsed };
+                MaxLines = 4, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden, FontSize = BodySize,
+                Foreground = Ink, Background = Header, Padding = new Thickness(5, 3, 5, 3),
+                BorderThickness = new Thickness(0), FocusVisualStyle = null,
+                Margin = new Thickness(1, 4, 1, 6), Visibility = Visibility.Collapsed };
             AutomationProperties.SetName(draftNotes, "子任务（每行一项）");
             fields.Children.Add(draftNotes);
             var actions = new DockPanel { LastChildFill = false, Margin = new Thickness(0, 4, 0, 0) };
@@ -186,7 +192,7 @@ namespace Xiaohei
                 submit.Opacity = submit.IsEnabled ? 1 : 0.55;
                 if (submit.IsEnabled) draftHint.Visibility = Visibility.Collapsed;
             };
-            TrackComposition(row);
+            TrackDraftInput(row);
             row.PreviewKeyDown += delegate(object sender, KeyEventArgs e)
             {
                 if (e.Key != Key.Enter || draftComposing || e.IsRepeat) return;
@@ -209,9 +215,10 @@ namespace Xiaohei
                 draftTitle.BringIntoView();
                 return false;
             }
-            var task = new TaskItem { Id = Guid.NewGuid().ToString("N"), Day = DayKey(draftDay), Title = name, Notes = notes };
+            var task = new TaskItem { Id = Guid.NewGuid().ToString("N"), IsLongTerm = draftLongTerm,
+                Day = draftLongTerm ? null : DayKey(draftDay), Title = name, Notes = notes };
             store.Tasks.Add(task);
-            if (!Persist(this)) { store.Tasks.Remove(task); return false; }
+            if (!Persist(this, delegate { store.Tasks.Remove(task); })) return false;
             ClearDraft();
             return true;
         }
@@ -222,6 +229,7 @@ namespace Xiaohei
             draftTitle = null;
             draftNotes = null;
             draftHint = null;
+            draftLongTerm = false;
             draftComposing = false;
         }
 

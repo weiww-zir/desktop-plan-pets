@@ -8,6 +8,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 
 namespace Xiaohei
@@ -15,6 +16,43 @@ namespace Xiaohei
     internal sealed partial class Planner
     {
         private bool closingPlanner;
+        private UIElement dayListEnd;
+        private bool dayHeightPending;
+        private double lastRequestedHeight = Double.NaN;
+
+        private void RequestDayHeight()
+        {
+            if (dayHeightPending || !IsVisible) return;
+            dayHeightPending = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(delegate {
+                dayHeightPending = false;
+                FitDayHeight(false);
+            }));
+        }
+
+        private double DayListHeight()
+        {
+            if (dayListEnd == null) return 0;
+            double bottom = dayListEnd.TranslatePoint(new Point(0, dayListEnd.RenderSize.Height), sections).Y;
+            return Math.Ceiling(sections.Margin.Top + bottom + sections.Margin.Bottom);
+        }
+
+        internal void FitDayHeight(bool opening)
+        {
+            var pet = Owner as DesktopPet;
+            if (pet == null || !IsVisible || closingPlanner) return;
+            UpdateLayout();
+            double listHeight = DayListHeight();
+            double desired = store.PlannerHeight;
+            if (dayListEnd != null && (pet.ManualHeightDay != selected || Math.Abs(pet.ManualDayContentHeight - listHeight) > 1))
+            {
+                double calendar = body.CalendarHeaderHeight + (store.CalendarCollapsed ? 0 : minimumWeekHeight);
+                desired = Math.Max(desired, Math.Ceiling(ActualHeight - body.ActualHeight + listHeight + calendar));
+            }
+            if (!opening && desired == lastRequestedHeight) return;
+            lastRequestedHeight = desired;
+            pet.FitPlanner(this, new Size(Width, desired));
+        }
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
@@ -152,10 +190,22 @@ namespace Xiaohei
         private void SaveFrameSize()
         {
             var previous = new Size(store.PlannerWidth, store.PlannerHeight);
-            if (previous.Width == Width && previous.Height == Height) return;
             store.PlannerWidth = Width;
             store.PlannerHeight = Height;
-            if (!Persist(this)) { store.PlannerWidth = previous.Width; store.PlannerHeight = previous.Height; }
+            if ((previous.Width != Width || previous.Height != Height) && !Persist(this))
+            {
+                store.PlannerWidth = previous.Width;
+                store.PlannerHeight = previous.Height;
+                return;
+            }
+            var pet = Owner as DesktopPet;
+            if (pet != null && dayListEnd != null)
+            {
+                UpdateLayout();
+                pet.ManualHeightDay = selected;
+                pet.ManualDayContentHeight = DayListHeight();
+            }
+            lastRequestedHeight = Height;
         }
 
         private void InstallFrameGestures(Border titleBar, Button close, Grid handles)
@@ -199,7 +249,7 @@ namespace Xiaohei
             var pet = Owner as DesktopPet;
             if (pet == null) return;
             UpdateLayout();
-            double chromeHeight = ActualHeight - scroll.ActualHeight;
+            double chromeHeight = ActualHeight - body.ActualHeight + body.CalendarNaturalHeight;
             sections.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             // Long titles wrap or expose their detail tooltip; they should not
             // expand a desktop planner across the entire screen.

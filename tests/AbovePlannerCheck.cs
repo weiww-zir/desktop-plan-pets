@@ -70,6 +70,49 @@ namespace Xiaohei
             Settle();
         }
 
+        private static Planner CheckDayHeight(Planner planner, DesktopPet pet, Rect area, Store store, string folder)
+        {
+            double baseline = store.PlannerHeight;
+            double room = pet.Top - 8 - (area.Top + 20);
+            var original = store.Tasks.ToList();
+            Check(room > baseline + 1 ? planner.Height > baseline + 1 : Math.Abs(planner.Height - room) <= 1,
+                "crowded day grows on its first open within the available space");
+            Check(new Store(folder).PlannerHeight == baseline, "automatic height leaves the saved preference intact");
+            for (int i = 0; i < 70; i++)
+                store.Tasks.Add(new TaskItem { Id = Guid.NewGuid().ToString("N"), Day = original[0].Day, Title = "当天新增任务 " + i });
+            planner.RefreshSchedule(store.Now);
+            Settle();
+            var scroll = Find<ScrollViewer>(planner).OrderByDescending(s => s.ActualHeight).First();
+            Check(Math.Abs(Frame(planner).Top - area.Top - 20) <= 1.5 && scroll.ScrollableHeight > 0,
+                "new tasks grow to the 20 DIP top margin and the overflow scrolls");
+            Verify(planner, pet, area, true, "window growth for new tasks");
+            store.Tasks.RemoveRange(1, store.Tasks.Count - 1);
+            planner.RefreshSchedule(store.Now);
+            Settle();
+            Check(Math.Abs(planner.Height - Math.Min(baseline, room)) <= 1, "a short day returns to the preferred height");
+            store.Tasks.Clear();
+            store.Tasks.AddRange(original);
+            planner.RefreshSchedule(store.Now);
+            Settle();
+            var beforeDrag = planner.Height;
+            Check(room > baseline + 1 ? beforeDrag > baseline + 1 : Math.Abs(beforeDrag - room) <= 1,
+                "adding tasks to the open short day expands it again");
+            var topEdge = Find<Thumb>(planner).Single(t => AutomationProperties.GetName(t) == "上边调整大小");
+            topEdge.RaiseEvent(new DragDeltaEventArgs(0, 36) { RoutedEvent = Thumb.DragDeltaEvent });
+            topEdge.RaiseEvent(new DragCompletedEventArgs(0, 36, false) { RoutedEvent = Thumb.DragCompletedEvent });
+            Settle();
+            var manual = planner.Height;
+            Check(Math.Abs(manual - (beforeDrag - 36)) <= 1 && Math.Abs(new Store(folder).PlannerHeight - manual) <= 1,
+                "manually reducing a crowded day persists the chosen height");
+            planner.RefreshSchedule(store.Now);
+            Settle();
+            Check(Math.Abs(planner.Height - manual) <= 1, "refreshing equal content respects the manual resize");
+            planner.Close();
+            var reopened = Open(pet);
+            Check(Math.Abs(reopened.Height - manual) <= 1, "reopening the same day retains the manual resize");
+            return reopened;
+        }
+
         private static void Verify(Window window, DesktopPet pet, Rect area, bool above, string scenario)
         {
             var panel = Frame(window);
@@ -116,6 +159,7 @@ namespace Xiaohei
                 Move(pet, area.Right - pet.Width - 8, bottom);
                 var planner = Open(pet);
                 Verify(planner, pet, area, true, "bottom-right open");
+                planner = CheckDayHeight(planner, pet, area, store, folder);
                 planner.Close();
                 Move(pet, center, bottom);
                 planner = Open(pet);

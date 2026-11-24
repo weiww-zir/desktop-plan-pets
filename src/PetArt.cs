@@ -12,13 +12,30 @@ namespace Xiaohei
     internal static partial class PetArt
     {
         private static readonly Brush Ink = ColorBrush(12, 11, 10);
-        private static readonly Brush Outline = ColorBrush(61, 42, 32);
+        private static readonly Brush PupilOutline = ColorBrush(61, 42, 32);
+        private static readonly Brush Outline = WarmOutline();
+        private static readonly Brush FaceLine = ColorBrush(112, 83, 63);
         private static readonly Brush Ear = ColorBrush(171, 193, 150);
         private static readonly Brush Ivory = ColorBrush(235, 229, 210);
 
         private static Brush ColorBrush(byte red, byte green, byte blue)
         {
             var brush = new SolidColorBrush(Color.FromRgb(red, green, blue));
+            brush.Freeze();
+            return brush;
+        }
+
+        private static Brush WarmOutline()
+        {
+            // One light direction across the drawing, including the separate tail and paw paths.
+            var brush = new LinearGradientBrush {
+                MappingMode = BrushMappingMode.Absolute, StartPoint = new Point(178, 102), EndPoint = new Point(500, 480),
+                ColorInterpolationMode = ColorInterpolationMode.SRgbLinearInterpolation
+            };
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(112, 83, 63), 0));
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(105, 80, 61), .32));
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(87, 64, 48), .69));
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(75, 55, 42), 1));
             brush.Freeze();
             return brush;
         }
@@ -101,8 +118,8 @@ namespace Xiaohei
             cat.Children.Add(eyes);
             Shape(eyes, "M 286,131 C 326,128 350,157 361,202 C 371,250 359,293 330,313 C 315,323 292,326 266,322 C 229,317 211,288 209,250 C 206,206 224,161 250,143 C 261,135 271,132 286,131 Z", Ivory, 11);
             Shape(eyes, "M 441,129 C 477,126 506,148 521,183 C 539,222 534,267 515,301 C 506,319 488,325 464,326 C 425,328 395,312 381,280 C 366,248 365,213 378,177 C 389,147 413,131 441,129 Z", Ivory, 11);
-            Shape(eyes, "M 282,167 C 307,164 327,186 329,218 C 330,249 319,277 295,280 C 267,286 248,268 246,236 C 244,203 254,172 274,168 Z", Ink, 12);
-            Shape(eyes, "M 448,162 C 472,162 484,186 485,214 C 487,247 478,276 457,278 C 431,280 416,260 414,232 C 412,200 422,167 444,163 Z", Ink, 12);
+            Shape(eyes, "M 282,167 C 307,164 327,186 329,218 C 330,249 319,277 295,280 C 267,286 248,268 246,236 C 244,203 254,172 274,168 Z", Ink, 12, PupilOutline);
+            Shape(eyes, "M 448,162 C 472,162 484,186 485,214 C 487,247 478,276 457,278 C 431,280 416,260 414,232 C 412,200 422,167 444,163 Z", Ink, 12, PupilOutline);
 
             // Rounded brush-shaped contours keep each paw legible at tray-icon sizes.
             cat = body;
@@ -201,11 +218,10 @@ namespace Xiaohei
             Shape(cat, "M 461,113 C 503,127 550,175 580,234 Q 600,274 580,288 Q 555,306 513,309 L 461,247 Z", Ink, 10);
             Shape(cat, "M 518,234 Q 554,246 581,269 Q 564,293 514,299 Z", Ear, 7);
             Shape(cat, "M 311,351 C 233,347 177,311 174,253 C 167,181 206,113 277,89 C 340,65 402,73 453,100 C 492,121 522,168 522,221 C 523,282 486,339 409,352", Ink, 10);
-            var faceLine = ColorBrush(100,65,49);
-            Shape(cat, "M 201,145 Q 242,146 268,156 M 336,157 Q 393,132 489,151", null, 10, faceLine);
+            Shape(cat, "M 201,145 Q 242,146 268,156 M 336,157 Q 393,132 489,151", null, 10, FaceLine);
             var mouth = new Canvas();
             cat.Children.Add(mouth);
-            Shape(mouth, "M 275,188 Q 274,186 277,186 L 331,186 Q 334,186 333,189 L 307,275 Q 305,280 303,274 Z", ColorBrush(130,168,165), 7, faceLine);
+            Shape(mouth, "M 275,188 Q 274,186 277,186 L 331,186 Q 334,186 333,189 L 307,275 Q 305,280 303,274 Z", ColorBrush(130,168,165), 7, FaceLine);
             if (motion)
             {
                 var open = new ScaleTransform(1,1,304,187);

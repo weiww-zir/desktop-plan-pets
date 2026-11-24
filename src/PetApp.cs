@@ -18,7 +18,7 @@ namespace Xiaohei
     internal static class PetApp
     {
         [STAThread]
-        private static void Main()
+        private static void Main(string[] args)
         {
             bool first;
             using (Mutex instance = new Mutex(true, @"Local\LuoXiaoheiPlanner.23E819", out first))
@@ -32,6 +32,8 @@ namespace Xiaohei
                     tipStyle.Setters.Add(new Setter(Control.TemplateProperty, PetMenu.HintTemplate));
                     app.Resources[typeof(ToolTip)] = tipStyle;
                     var pet = new DesktopPet(new Store());
+                    if (args.Contains("--planner", StringComparer.OrdinalIgnoreCase))
+                        pet.ContentRendered += delegate { pet.Dispatcher.BeginInvoke(new Action(pet.ShowPlanner)); };
                     var listener = ThreadPool.RegisterWaitForSingleObject(show, delegate
                     {
                         if (!app.Dispatcher.HasShutdownStarted)
@@ -386,6 +388,8 @@ namespace Xiaohei
         }
 
         private bool arrangingWindows;
+        internal DateTime? ManualHeightDay;
+        internal double ManualDayContentHeight;
 
         internal void WatchPlannerWindow(Window window)
         {
@@ -429,6 +433,8 @@ namespace Xiaohei
         internal void FitPlanner(Planner window, Size size)
         {
             var area = WorkingArea(Forms.Screen.FromHandle(new WindowInteropHelper(this).Handle));
+            double topGap = Math.Min(20, Math.Max(0, area.Height - 270));
+            area = new Rect(area.Left, area.Top + topGap, area.Width, area.Height - topGap);
             var minimum = new Size(Math.Min(300, area.Width), Math.Min(270, area.Height));
             var requested = new Size(Math.Max(minimum.Width, size.Width), Math.Max(minimum.Height, size.Height));
             var bounds = PetLayout.AbovePet(area, new Rect(Left, Top, Width, Height), requested, minimum, 8);
@@ -474,6 +480,7 @@ namespace Xiaohei
             {
                 FitPlanner(planner, new Size(store.PlannerWidth, store.PlannerHeight));
                 planner.Show();
+                planner.FitDayHeight(true);
             }
             if (planner.WindowState == WindowState.Minimized) planner.WindowState = WindowState.Normal;
             var active = planner.OwnedWindows.Cast<Window>().FirstOrDefault(w => w.IsVisible) ?? planner;

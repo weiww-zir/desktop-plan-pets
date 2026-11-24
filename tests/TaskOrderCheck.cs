@@ -16,6 +16,7 @@ namespace Xiaohei
         {
             foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<FrameworkElement>())
             {
+                if (child.Visibility != Visibility.Visible) continue;
                 yield return child;
                 foreach (var descendant in Tree(child)) yield return descendant;
             }
@@ -61,7 +62,10 @@ namespace Xiaohei
                 .Where(x => x.Contains("星期")).ToArray();
             var expectedDates = new[]{0, 2, 0, 1}.Select(i => now.AddDays(i).ToString("M月d日 dddd", CultureInfo.GetCultureInfo("zh-CN")));
             if (!dates.SequenceEqual(expectedDates)) throw new Exception("Date headings: " + String.Join(", ", dates));
-            Click(planner, "添加子任务：r1");
+            var more = Tree(planner).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "任务操作：r1");
+            more.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            more.ContextMenu.Items.OfType<MenuItem>().Single(item => (string)item.Header == "添加子任务")
+                .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             var editor = Tree(planner).OfType<TextBox>().Single();
             editor.Text = "unfinished";
             var check = Tree(planner).OfType<CheckBox>().Single(b => AutomationProperties.GetName(b) == "完成任务：r1");
