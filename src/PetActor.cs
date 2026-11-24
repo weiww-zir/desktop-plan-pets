@@ -19,9 +19,9 @@ namespace Xiaohei
         private const int StrokeIntervalMs = 84;
         private readonly Stopwatch sinceStroke = new Stopwatch();
         private PetArt.TypingKeyboard typingKeyboard;
-        private bool nextStrokeLeft;
         private bool jumpAfterWave;
         private bool tailAfterSpirits;
+        private bool automaticTailPlaying;
         private bool idleExpired;
         private readonly Decorator drawing = new Decorator();
         private FrameworkElement earAnchor;
@@ -57,7 +57,7 @@ namespace Xiaohei
             tailTimer.Tick += delegate
             {
                 if (Pose == PetPose.SpiritOrbit) tailAfterSpirits = true;
-                else Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs);
+                else if (Pose != PetPose.Typing) Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs, true);
             };
             hover.Tick += delegate
             {
@@ -77,7 +77,7 @@ namespace Xiaohei
                 if (tailAfterSpirits)
                 {
                     tailAfterSpirits = false;
-                    Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs);
+                    Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs, true);
                 }
                 else if (Pose == PetPose.Wave && jumpAfterWave) Act(PetPose.Hop, 630);
                 else SetPose(idleExpired ? PetPose.Nap : PetPose.Rest);
@@ -157,11 +157,12 @@ namespace Xiaohei
             Play(pose, milliseconds);
         }
 
-        private void Play(PetPose pose, int milliseconds)
+        private void Play(PetPose pose, int milliseconds, bool automaticTail = false)
         {
             hover.Stop();
             finish.Stop();
             SetPose(pose);
+            automaticTailPlaying = automaticTail;
             finish.Interval = TimeSpan.FromMilliseconds(milliseconds);
             finish.Start();
         }
@@ -173,26 +174,33 @@ namespace Xiaohei
             idle.Start();
         }
 
-        internal void TapKeyboard()
+        internal void TapKeyboard(string key = null)
         {
             if (!IsLoaded || !IsVisible) return;
             RecordActivity();
+            bool newStroke = true;
             if (Pose == PetPose.Typing)
             {
-                // A coalesced tap still extends the pause from the latest input.
                 finish.Stop();
                 finish.Start();
-                if (sinceStroke.ElapsedMilliseconds < StrokeIntervalMs) return;
+                newStroke = sinceStroke.ElapsedMilliseconds >= StrokeIntervalMs;
             }
             else
             {
-                if (Pose != PetPose.Rest && Pose != PetPose.Nap && Pose != PetPose.Tilt) return;
+                if (Pose != PetPose.Rest && Pose != PetPose.Nap && Pose != PetPose.Tilt &&
+                    !(Pose == PetPose.TailKittens && automaticTailPlaying)) return;
                 Play(PetPose.Typing, TypingPauseMs);
-                nextStrokeLeft = true;
             }
-            typingKeyboard.Tap(nextStrokeLeft);
-            nextStrokeLeft = !nextStrokeLeft;
-            sinceStroke.Restart();
+            // Always retarget the keycap, even while a previous paw stroke is in flight.
+            typingKeyboard.Press(key, newStroke);
+            if (newStroke) sinceStroke.Restart();
+        }
+
+        internal void EndTyping()
+        {
+            if (Pose != PetPose.Typing) return;
+            finish.Stop();
+            SetPose(PetPose.Rest);
         }
 
         internal void Touch()

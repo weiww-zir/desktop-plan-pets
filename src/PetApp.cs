@@ -115,6 +115,21 @@ namespace Xiaohei
             open.Click += delegate { ShowPlanner(); };
             menu.Items.Add(open);
             menu.Items.Add(CreateSizeMenu());
+            var keyLabels = new MenuItem { Header = "显示按下的键", IsCheckable = true, IsChecked = !store.HideKeyLabels };
+            keyLabels.Click += delegate
+            {
+                bool previous = store.HideKeyLabels;
+                store.HideKeyLabels = !keyLabels.IsChecked;
+                actor.EndTyping();
+                try { store.Save(); }
+                catch (Exception error)
+                {
+                    store.HideKeyLabels = previous;
+                    keyLabels.IsChecked = !previous;
+                    PetApp.ShowError(this, Title, "按键显示设置未能保存。\n" + error.Message);
+                }
+            };
+            menu.Items.Add(keyLabels);
             var greet = new MenuItem { Header = "让小黑喵一声" };
             greet.Click += delegate { actor.Meow(); };
             menu.Items.Add(greet);
@@ -293,7 +308,7 @@ namespace Xiaohei
         {
             if (message == KeyboardActivity.InputMessage && keyboardRegistered && IsVisible)
             {
-                KeyboardActivity.Receive(lParam, actor);
+                KeyboardActivity.Receive(lParam, actor, !store.HideKeyLabels);
                 // Leave the message unhandled so Windows can clean up foreground raw input.
                 return IntPtr.Zero;
             }

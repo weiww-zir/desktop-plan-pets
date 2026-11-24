@@ -94,6 +94,7 @@ namespace Xiaohei
         internal bool CalendarCollapsed;
         internal bool LongTermListCollapsed = true;
         internal bool DayListCollapsed;
+        internal bool HideKeyLabels;
         internal bool RecoveredFromBackup { get; private set; }
         internal DateTime Now { get { return clock(); } }
         internal event Action Changed;
@@ -282,6 +283,7 @@ namespace Xiaohei
                     bool folded;
                     if (Boolean.TryParse((string)size.Attribute("longTermListCollapsed"), out folded)) LongTermListCollapsed = folded;
                     Boolean.TryParse((string)size.Attribute("dayListCollapsed"), out DayListCollapsed);
+                    Boolean.TryParse((string)size.Attribute("hideKeyLabels"), out HideKeyLabels);
                 }
                 Tasks.AddRange(items);
                 foreach (var note in notes) weeks.Add(note.Key, note.Value);
@@ -388,6 +390,7 @@ namespace Xiaohei
             string version = Tasks.Any(item => item.IsLongTerm) ? "4" : "3";
             var root = new XElement("Planner", new XAttribute("version", version),
                 new XElement("Size", new XAttribute("petWidth", PetWidth),
+                    new XAttribute("hideKeyLabels", HideKeyLabels),
                     new XAttribute("plannerWidth", PlannerWidth), new XAttribute("plannerHeight", PlannerHeight),
                     new XAttribute("calendarCollapsed", CalendarCollapsed),
                     new XAttribute("longTermListCollapsed", LongTermListCollapsed), new XAttribute("dayListCollapsed", DayListCollapsed)),

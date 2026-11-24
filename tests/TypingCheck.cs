@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Windows;
@@ -50,28 +52,36 @@ namespace Xiaohei
             var idle = Field<DispatcherTimer>(actor, "idle");
             var hover = Field<DispatcherTimer>(actor, "hover");
             var tail = Field<DispatcherTimer>(actor, "tailTimer");
-            actor.TapKeyboard();
-            Check(actor.Pose == PetPose.Rest && !finish.IsEnabled, "unloaded actor ignores queued keyboard input");
+            actor.TapKeyboard("C");
+            Check(actor.Pose == PetPose.Rest && !finish.IsEnabled, "unloaded actor ignores keyboard input");
             window.Show();
             Until(() => actor.IsLoaded && actor.IsVisible, "actor load");
             actor.ShowPendingCount(3);
-            actor.TapKeyboard();
+            actor.TapKeyboard("C");
             var keyboard = Field<PetArt.TypingKeyboard>(actor, "typingKeyboard");
-            Check(actor.Pose == PetPose.Typing && keyboard != null && !Field<bool>(actor, "nextStrokeLeft"),
-                "first pulse immediately taps the left paw");
-            for (int i = 0; i < 20; i++) actor.TapKeyboard();
-            Check(!Field<bool>(actor, "nextStrokeLeft"), "rapid pulses do not queue extra strikes");
-            Wait(120);
+            Check(actor.Pose == PetPose.Typing && keyboard != null && Caption(keyboard).Text == "C",
+                "first keystroke immediately shows C");
+            foreach (string key in new[] { "A", "T", "P", "A", "P", "P", "4", ";", "Space", "F12" })
+            {
+                actor.TapKeyboard(key);
+                Check(keyboard == Field<PetArt.TypingKeyboard>(actor, "typingKeyboard") && Caption(keyboard).Text == key,
+                    "rapid keystroke shows the latest key in the same drawing: " + key);
+            }
             actor.TapKeyboard();
-            Check(Field<bool>(actor, "nextStrokeLeft") && keyboard == Field<PetArt.TypingKeyboard>(actor, "typingKeyboard"),
-                "a later pulse taps the other paw in the same drawing");
-            Wait(46);
-            actor.TapKeyboard();
+            Check(string.IsNullOrEmpty(Caption(keyboard).Text), "anonymous keystroke clears the old key");
+            actor.TapKeyboard("C");
+            actor.TapKeyboard("UnknownKey");
+            Check(string.IsNullOrEmpty(Caption(keyboard).Text), "unrecognized key does not leave or invent a label");
+            actor.TapKeyboard("T");
+            Wait(360);
+            actor.TapKeyboard("T");
             var pause = Stopwatch.StartNew();
-            Check(Field<bool>(actor, "nextStrokeLeft"), "last pulse falls inside the visual throttle");
+            Wait(520);
+            Check(actor.Pose == PetPose.Typing && Caption(keyboard).Text == "T", "rebound retains the last key until the renewed pause ends");
             Until(() => actor.Pose == PetPose.Rest, "return to seated rest");
-            Check(pause.ElapsedMilliseconds >= 778 && pause.ElapsedMilliseconds < 1600 && !finish.IsEnabled,
-                "the last suppressed pulse renews the pause and no queued motion is played");
+            Check(pause.ElapsedMilliseconds >= 775 && pause.ElapsedMilliseconds < 1450 &&
+                !finish.IsEnabled && Field<PetArt.TypingKeyboard>(actor, "typingKeyboard") == null,
+                "typing clears after about 800 ms from the last keystroke");
 
             var normalIdle = idle.Interval;
             idle.Interval = TimeSpan.FromMilliseconds(35);
@@ -97,8 +107,15 @@ namespace Xiaohei
             Check(actor.Pose == PetPose.SpiritOrbit, "typing and the scheduled tail wait for the butterflies");
             finish.Interval = TimeSpan.FromMilliseconds(40);
             Until(() => actor.Pose == PetPose.TailKittens, "pending tail after butterflies");
-            actor.TapKeyboard();
-            Check(actor.Pose == PetPose.TailKittens, "typing leaves the kittens in place");
+            actor.TapKeyboard("A");
+            Check(actor.Pose == PetPose.Typing, "keystroke immediately interrupts the scheduled kittens");
+            tail.Interval = TimeSpan.FromMilliseconds(35);
+            Wait(100);
+            tail.Interval = normalTail;
+            Check(actor.Pose == PetPose.Typing, "an automatic tail tick leaves active typing visible");
+            actor.SplitTail();
+            actor.TapKeyboard("C");
+            Check(actor.Pose == PetPose.TailKittens, "typing honours a manually requested tail animation");
             finish.Interval = TimeSpan.FromMilliseconds(40);
             Until(() => actor.Pose == PetPose.Rest, "kittens finish");
             actor.TapKeyboard();
@@ -121,53 +138,137 @@ namespace Xiaohei
             return frame;
         }
 
-        static double CenterOfChange(BitmapSource baseline, BitmapSource hit)
+        static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
         {
-            int width = baseline.PixelWidth;
-            var a = new byte[width * 4 * baseline.PixelHeight];
-            var b = new byte[a.Length];
-            baseline.CopyPixels(a, width * 4, 0);
-            hit.CopyPixels(b, width * 4, 0);
-            int count = 0;
-            double center = 0;
-            for (int p = 0; p < a.Length; p += 4)
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
             {
-                int difference = 0;
-                for (int channel = 0; channel < 4; channel++) difference += Math.Abs(a[p+channel] - b[p+channel]);
-                if (difference < 20) continue;
-                if (p / (4 * width) < baseline.PixelHeight * .56) throw new Exception("Stroke changed the face");
-                center += (p / 4) % width;
-                count++;
+                var child = VisualTreeHelper.GetChild(root, i);
+                if (child is T) yield return (T)child;
+                foreach (var element in Descendants<T>(child)) yield return element;
             }
-            if (count == 0) throw new Exception("Missing visible key/paw contact at width " + width);
-            return center / count;
+        }
+
+        static TextBlock Caption(PetArt.TypingKeyboard keyboard)
+        {
+            return Descendants<Viewbox>(keyboard).Select(v => v.Child).OfType<TextBlock>().Single();
+        }
+
+        static int Differences(BitmapSource first, BitmapSource second, Rect area)
+        {
+            int width = first.PixelWidth;
+            var a = new byte[width * 4 * first.PixelHeight];
+            var b = new byte[a.Length];
+            first.CopyPixels(a, width * 4, 0);
+            second.CopyPixels(b, width * 4, 0);
+            int count = 0;
+            for (int y = Math.Max(0, (int)area.Top); y < Math.Min(first.PixelHeight, (int)Math.Ceiling(area.Bottom)); y++)
+                for (int x = Math.Max(0, (int)area.Left); x < Math.Min(width, (int)Math.Ceiling(area.Right)); x++)
+                {
+                    int p = (y * width + x) * 4;
+                    int change = 0;
+                    for (int c = 0; c < 4; c++) change += Math.Abs(a[p + c] - b[p + c]);
+                    if (change > 40) count++;
+                }
+            return count;
+        }
+
+        static void AnimatedRebound()
+        {
+            const int width = 240, height = 228;
+            var keyboard = new PetArt.TypingKeyboard(true);
+            var scene = PetArt.Draw(false, PetPose.Typing, null, keyboard);
+            var host = new Window { Content = scene, Width = width, Height = height, WindowStyle = WindowStyle.None,
+                ShowInTaskbar = false, ShowActivated = false, WindowStartupLocation = WindowStartupLocation.Manual,
+                Left = -9000, Top = -9000 };
+            host.Show();
+            var raised = Capture(scene, width, height);
+            Rect a, p;
+            if (!PetArt.TypingKeyboard.TryGetKeyBounds("A", out a) || !PetArt.TypingKeyboard.TryGetKeyBounds("P", out p))
+                throw new Exception("Missing A or P from the drawn keyboard");
+            var transform = keyboard.TransformToAncestor(scene);
+            a = transform.TransformBounds(a);
+            p = transform.TransformBounds(p);
+            keyboard.Press("A", true);
+            Until(() => Differences(raised, Capture(scene, width, height), a) >= 4, "animated A makes contact");
+            keyboard.Press("P", false);
+            Until(delegate {
+                var overlap = Capture(scene, width, height);
+                return Differences(raised, overlap, a) >= 4 && Differences(raised, overlap, p) >= 4;
+            }, "P makes contact while A is still releasing");
+            Until(delegate {
+                var released = Capture(scene, width, height);
+                return Differences(raised, released, a) == 0 && Differences(raised, released, p) == 0;
+            }, "both A and P rebound on their own");
+            Check(Caption(keyboard).Text == "P", "animated rapid cross-hand press rebounds while P stays readable");
+            host.Close();
         }
 
         static void Frames(string dir)
         {
-            foreach (int width in new[] { 50, 92, 240 })
+            foreach (int width in new[] { 64, 92, 240 })
             {
                 int height = (int)Math.Round(width * 455.0 / 480);
                 var anchor = new FrameworkElement();
                 var keyboard = new PetArt.TypingKeyboard(false);
                 var scene = PetArt.Draw(false, PetPose.Typing, anchor, keyboard);
-                var up = Capture(scene, width, height);
-                keyboard.SetDepth(true, 1);
-                var left = Capture(scene, width, height);
-                keyboard.SetDepth(true, 0);
-                keyboard.SetDepth(false, 1);
-                var right = Capture(scene, width, height);
+                Capture(scene, width, height);
+                var restAnchor = new FrameworkElement();
+                var idleView = PetArt.Draw(false, PetPose.Rest, restAnchor);
+                var sitting = Capture(idleView, width, height);
                 var ear = anchor.TranslatePoint(new Point(), scene);
-                Check(CenterOfChange(up, left) < CenterOfChange(up, right) && ear.X > width * .72 && ear.Y < height * .23,
-                    "distinct left/right contact and stable right-ear anchor at " + width + " DIPs");
+                var idleEar = restAnchor.TranslatePoint(new Point(), idleView);
+                Check((ear - idleEar).Length < .2 && ear.X > width * .72 && ear.Y < height * .23,
+                    "typing keeps the seated right-ear anchor at " + width + " DIPs");
+                var transforms = keyboard.TransformToAncestor(scene);
+                var keys = new[] { "C", "A", "P" };
+                var images = new List<BitmapSource>();
+                var bounds = new List<Rect>();
+                foreach (string key in keys)
+                {
+                    Rect cap;
+                    Check(PetArt.TypingKeyboard.TryGetKeyBounds(key, out cap), "drawn key exists: " + key);
+                    var actual = transforms.TransformBounds(cap);
+                    bounds.Add(actual);
+                    keyboard.Press(key, false);
+                    keyboard.SetPressDepth(0);
+                    var released = Capture(scene, width, height);
+                    keyboard.SetPressDepth(1);
+                    var pressed = Capture(scene, width, height);
+                    images.Add(pressed);
+                    Check(Differences(released, pressed, actual) > 0,
+                        key + " has a visible press at its own keycap at " + width + " DIPs");
+                    keyboard.SetPressDepth(0);
+                    var rebound = Capture(scene, width, height);
+                    Check(Differences(released, rebound, new Rect(0, 0, width, height)) == 0,
+                        key + " returns to the released frame");
+                    var caption = Caption(keyboard);
+                    var captionBounds = caption.TransformToAncestor(scene).TransformBounds(new Rect(caption.RenderSize));
+                    Check(caption.Text == key && new Rect(0, 0, width, height).Contains(captionBounds) &&
+                        (width != 92 || captionBounds.Height >= 12),
+                        key + " caption fits the frame and is readable at default size; " + captionBounds);
+                    if (width == 92)
+                    {
+                        caption.Visibility = Visibility.Hidden;
+                        var withoutLetter = Capture(scene, width, height);
+                        caption.Visibility = Visibility.Visible;
+                        int ink = Differences(rebound, withoutLetter, captionBounds);
+                        Check(ink >= 14, key + " paints a visible single glyph at the default pet size: " + ink + " pixels");
+                    }
+                    Check(Differences(sitting, pressed, new Rect(0, 0, width * .75, height * .62)) == 0,
+                        "key feedback preserves the seated face");
+                }
+                Check(bounds[1].Right < bounds[0].Left && bounds[0].Right < bounds[2].Left,
+                    "A and C have distinct left-hand positions and P is on the right");
+                var pawBand = transforms.TransformBounds(new Rect(190, 370, 400, 55));
+                Check(Differences(images[0], images[1], pawBand) > 0 && Differences(images[1], images[2], pawBand) > 0,
+                    "same-side and cross-side presses visibly move the paws at " + width + " DIPs");
+                keyboard.Press(null, false);
+                Check(string.IsNullOrEmpty(Caption(keyboard).Text), "anonymous press erases the previous caption");
                 if (width != 240 || dir == null) continue;
                 var preview = new DrawingVisual();
                 using (var draw = preview.RenderOpen())
-                {
-                    var frames = new[] { up, left, right };
-                    for (int i = 0; i < frames.Length; i++) draw.DrawImage(frames[i], new Rect(i * width, 0, width, height));
-                }
-                var result = new RenderTargetBitmap(width * 3, height, 96, 96, PixelFormats.Pbgra32);
+                    for (int i = 0; i < images.Count; i++) draw.DrawImage(images[i], new Rect(i * width, 0, width, height));
+                var result = new RenderTargetBitmap(width * images.Count, height, 96, 96, PixelFormats.Pbgra32);
                 result.Render(preview);
                 var png = new PngBitmapEncoder();
                 png.Frames.Add(BitmapFrame.Create(result));
@@ -182,6 +283,7 @@ namespace Xiaohei
             {
                 var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
                 Frames(args.Length == 0 ? null : args[0]);
+                AnimatedRebound();
                 Play();
                 app.Shutdown();
                 return 0;

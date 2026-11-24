@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -10,98 +12,240 @@ namespace Xiaohei
     {
         internal sealed class TypingKeyboard : Canvas
         {
-            private static readonly Brush Case = ColorBrush(119, 139, 117);
-            private static readonly Brush Deck = ColorBrush(178, 187, 163);
-            private static readonly Brush Key = ColorBrush(242, 230, 204);
-            private static readonly Brush Accent = ColorBrush(216, 225, 192);
-            private static readonly Brush Pressed = ColorBrush(255, 198, 115);
-            private static readonly Brush KeyEdge = ColorBrush(112, 115, 95);
+            private sealed class Keycap
+            {
+                internal Rect Bounds;
+                internal Brush Fill;
+                internal Geometry Legend;
+            }
 
+            private static readonly Brush Case = ColorBrush(116, 136, 115);
+            private static readonly Brush Deck = ColorBrush(164, 177, 155);
+            private static readonly Brush Key = ColorBrush(244, 233, 209);
+            private static readonly Brush Accent = ColorBrush(216, 225, 196);
+            private static readonly Brush Pressed = ColorBrush(255, 189, 93);
+            private static readonly Brush KeyInk = ColorBrush(66, 61, 50);
+            private static readonly Pen Edge = MakePen(ColorBrush(96, 110, 91), 1);
+            private static readonly Pen Rim = MakePen(Outline, 5);
+            private static readonly Pen FurEdge = MakePen(Outline, 5);
+            private static readonly Typeface Lettering = new Typeface(new FontFamily("Segoe UI, Segoe UI Symbol"),
+                FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+            private static readonly Dictionary<string, Keycap> Keys = new Dictionary<string, Keycap>(StringComparer.Ordinal);
+            private static readonly HashSet<string> ExtendedKeys = ExtendedKeyboard();
+            private static readonly DrawingGroup Board = DrawBoard();
             private static readonly DependencyProperty LeftDepth = DependencyProperty.Register("LeftDepth", typeof(double),
-                typeof(TypingKeyboard), new PropertyMetadata(0.0, (d, e) => ((TypingKeyboard)d).SetDepth(true, (double)e.NewValue)));
+                typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
             private static readonly DependencyProperty RightDepth = DependencyProperty.Register("RightDepth", typeof(double),
-                typeof(TypingKeyboard), new PropertyMetadata(0.0, (d, e) => ((TypingKeyboard)d).SetDepth(false, (double)e.NewValue)));
-            private static readonly DoubleAnimationUsingKeyFrames Stroke = MakeStroke();
+                typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
+            private static readonly DoubleAnimationUsingKeyFrames Stroke = Pulse(false), FastStroke = Pulse(true);
 
             private readonly bool motion;
-            private readonly ScaleTransform[] wrists = { new ScaleTransform(1, 1, 333, 394), new ScaleTransform(1, 1, 417, 394) };
-            private readonly Border[] strikeKeys = new Border[2];
-            private readonly TranslateTransform[] keyTravel = { new TranslateTransform(), new TranslateTransform() };
+            private readonly Border hint;
+            private readonly TextBlock letter;
+            private Keycap leftTarget, rightTarget;
+            private bool left, anonymous;
 
             internal TypingKeyboard(bool motion)
             {
                 this.motion = motion;
+                Width = 640;
+                Height = 505;
                 IsHitTestVisible = false;
-                // Draw the lip and the tapered deck in the original sitting pose's coordinate space.
-                Shape(this, "M 294,437 Q 297,433 304,433 L 451,433 Q 457,433 460,437 L 486,468 Q 492,473 487,481 Q 485,487 477,487 L 276,487 Q 267,487 265,480 Q 262,474 266,468 Z", Case, 6);
-                Shape(this, "M 295,437 Q 298,433 304,433 L 451,433 Q 456,433 460,437 L 482,466 Q 486,472 478,474 L 274,474 Q 267,473 271,468 Z", Deck, 3.5, KeyEdge);
-                for (int i = 0; i < 6; i++)
-                    AddKey(304 + 25 * i, 438, 21, 9, i == 0 ? Accent : Key);
-                for (int i = 0; i < 7; i++)
+                letter = new TextBlock { FontFamily = Lettering.FontFamily, FontSize = 74, FontWeight = FontWeights.Bold,
+                    Foreground = KeyInk, TextAlignment = TextAlignment.Center };
+                hint = new Border { Visibility = Visibility.Hidden, Background = Key, BorderBrush = FaceLine,
+                    BorderThickness = new Thickness(4, 4, 4, 7), CornerRadius = new CornerRadius(17),
+                    Padding = new Thickness(6, 0, 6, 2), Child = new Viewbox { Stretch = Stretch.Uniform, Child = letter } };
+                Children.Add(hint);
+            }
+
+            private static Pen MakePen(Brush color, double size)
+            {
+                var pen = new Pen(color, size) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round,
+                    LineJoin = PenLineJoin.Round };
+                pen.Freeze();
+                return pen;
+            }
+
+            private static HashSet<string> ExtendedKeyboard()
+            {
+                var names = new HashSet<string>("Pause PgUp PgDn End Home PrtSc Ins Menu Num ScrLk Num* Num+ Num- Num. Num/".Split(' '), StringComparer.Ordinal);
+                for (int i = 1; i <= 24; i++) names.Add("F" + i.ToString(CultureInfo.InvariantCulture));
+                for (int i = 0; i <= 9; i++) names.Add("Num" + i.ToString(CultureInfo.InvariantCulture));
+                return names;
+            }
+
+            private static DrawingGroup DrawBoard()
+            {
+                var drawing = new DrawingGroup();
+                using (var dc = drawing.Open())
                 {
-                    var key = AddKey(294 + 24 * i, 450, 20, 10, Key);
-                    if (i == 2 || i == 4)
-                    {
-                        int side = i == 2 ? 0 : 1;
-                        key.RenderTransform = keyTravel[side];
-                        strikeKeys[side] = key;
-                    }
+                    dc.DrawGeometry(Case, Rim, Geometry.Parse("M 229,424 Q 233,418 241,418 L 514,418 Q 521,418 526,424 L 561,480 Q 568,495 553,499 L 210,499 Q 193,497 200,484 Z"));
+                    dc.DrawGeometry(Deck, Edge, Geometry.Parse("M 233,424 Q 236,420 242,420 H 512 Q 518,420 521,425 L 555,483 Q 560,491 549,491 H 214 Q 204,491 209,482 Z"));
+                    AddRow(dc, 0, "Esc ` 1 2 3 4 5 6 7 8 9 0 - = Bksp");
+                    AddRow(dc, 1, "Tab Q W E R T Y U I O P [ ] \\");
+                    AddRow(dc, 2, "Caps A S D F G H J K L ; ' Enter");
+                    AddRow(dc, 3, "Shift Z X C V B N M , . / ↑ Del");
+                    AddRow(dc, 4, "Fn Ctrl Win Alt Space ← ↓ →");
                 }
-                AddKey(282, 463, 25, 8, Accent);
-                AddKey(312, 463, 19, 8, Key);
-                AddKey(337, 463, 76, 8, Key);
-                AddKey(419, 463, 19, 8, Key);
-                AddKey(444, 463, 28, 8, Accent);
-
-                var left = new Canvas { RenderTransform = wrists[0] };
-                var right = new Canvas { RenderTransform = wrists[1] };
-                Children.Add(left);
-                Children.Add(right);
-                // Open shoulder contours join the original black body.
-                Shape(left, "M 329,395 C 325,400 322,410 323,416 C 323,425 331,435 341,439 Q 352,443 358,435 Q 361,428 354,423 L 347,417 Q 341,411 342,403", Ink, 7);
-                Shape(right, "M 417,395 Q 428,406 425,418 C 423,428 416,436 408,439 Q 395,442 390,434 Q 387,428 394,423 L 400,419 Q 409,412 408,403", Ink, 7);
-                Shape(left, "M 342,438 Q 342,434 346,432", null, 3.5, FaceLine);
-                Shape(right, "M 406,438 Q 406,434 402,432", null, 3.5, FaceLine);
+                drawing.Freeze();
+                return drawing;
             }
 
-            private Border AddKey(double x, double y, double width, double height, Brush fill)
+            private static double KeyWidth(string name)
             {
-                var key = new Border { Width = width, Height = height, Background = fill, BorderBrush = KeyEdge,
-                    BorderThickness = new Thickness(1, 1, 1, 2), CornerRadius = new CornerRadius(3) };
-                Canvas.SetLeft(key, x);
-                Canvas.SetTop(key, y);
-                Children.Add(key);
-                return key;
+                switch (name)
+                {
+                    case "Space": return 7;
+                    case "Shift": return 2;
+                    case "Enter": case "Bksp": return 1.8;
+                    case "Caps": case "Tab": return 1.55;
+                    case "Ctrl": case "Alt": return 1.25;
+                    default: return 1;
+                }
             }
 
-            private static DoubleAnimationUsingKeyFrames MakeStroke()
+            private static void AddRow(DrawingContext dc, int row, string layout)
             {
-                var stroke = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(165), FillBehavior = FillBehavior.Stop };
-                stroke.KeyFrames.Add(new LinearDoubleKeyFrame(0.2, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-                stroke.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(32))));
-                stroke.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(65))));
-                stroke.KeyFrames.Add(new SplineDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(165)), new KeySpline(.22, 0, .35, 1)));
-                stroke.Freeze();
-                return stroke;
+                string[] names = layout.Split(' ');
+                double units = 0;
+                foreach (string name in names) units += KeyWidth(name);
+                double x = 236 - 6 * row, step = (280 + 14 * row) / units;
+                foreach (string name in names)
+                {
+                    double width = step * KeyWidth(name);
+                    var bounds = new Rect(x, 422 + 13.6 * row, width - 1.7, 11.9);
+                    // Use the original Framework overload: key legends are frozen outlines, not monitor-dependent text.
+#pragma warning disable 618
+                    var label = new FormattedText(name, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Lettering,
+                        name.Length > 3 ? 7.9 : 9.7, KeyInk);
+#pragma warning restore 618
+                    var legend = label.BuildGeometry(new Point(bounds.X + (bounds.Width - label.Width) / 2,
+                        bounds.Y + (bounds.Height - label.Height) / 2));
+                    var key = new Keycap { Bounds = bounds, Fill = name.Length > 1 || "←↑→↓".Contains(name) ? Accent : Key,
+                        Legend = legend };
+                    Keys.Add(name, key);
+                    DrawKey(dc, key, key.Fill, 0);
+                    x += width;
+                }
             }
 
-            internal void Tap(bool left)
+            private static void DrawKey(DrawingContext dc, Keycap cap, Brush color, double travel)
             {
-                if (motion) BeginAnimation(left ? LeftDepth : RightDepth, Stroke, HandoffBehavior.SnapshotAndReplace);
+                if (travel > 0) dc.PushTransform(new TranslateTransform(0, travel));
+                dc.DrawRoundedRectangle(color, Edge, cap.Bounds, 2.1, 2.1);
+                dc.DrawGeometry(KeyInk, null, cap.Legend);
+                if (travel > 0) dc.Pop();
+            }
+
+            internal static bool TryGetKeyBounds(string key, out Rect bounds)
+            {
+                Keycap cap;
+                if (key != null && Keys.TryGetValue(key, out cap)) { bounds = cap.Bounds; return true; }
+                bounds = Rect.Empty;
+                return false;
+            }
+
+            internal void Press(string key, bool animateStroke)
+            {
+                Keycap cap = null;
+                if (key != null && !Keys.TryGetValue(key, out cap))
+                {
+                    if (ExtendedKeys.Contains(key)) cap = Keys["Fn"];
+                    else key = null;
+                }
+                // An anonymous event must not reveal a previous named reach, even while that paw is returning.
+                if ((!anonymous && cap == null) || !motion)
+                {
+                    SetDepth(LeftDepth, 0);
+                    SetDepth(RightDepth, 0);
+                    leftTarget = rightTarget = null;
+                }
+                anonymous = cap == null;
+                if (anonymous) cap = Keys[left ? "J" : "F"];
+                left = cap.Bounds.X + cap.Bounds.Width / 2 < 377;
+                if (left) leftTarget = cap;
+                else rightTarget = cap;
+                letter.Text = key ?? "";
+                hint.Visibility = anonymous ? Visibility.Hidden : Visibility.Visible;
+                if (!anonymous)
+                {
+                    bool wide = key.Length > 2;
+                    hint.Width = wide ? 120 : 101;
+                    hint.Height = wide ? 64 : 87;
+                    SetLeft(hint, wide ? 514 : 533);
+                    SetTop(hint, wide ? 314 : 278);
+                }
+                var property = left ? LeftDepth : RightDepth;
+                if (motion)
+                {
+                    SetValue(property, 0.0);
+                    BeginAnimation(property, animateStroke ? Stroke : FastStroke, HandoffBehavior.SnapshotAndReplace);
+                }
                 else
-                {
-                    strikeKeys[left ? 0 : 1].Background = Pressed;
-                    strikeKeys[left ? 1 : 0].Background = Key;
-                }
+                    SetValue(property, 1.0);
+                InvalidateVisual();
             }
 
-            internal void SetDepth(bool left, double depth)
+            internal void SetPressDepth(double depth)
             {
-                int side = left ? 0 : 1;
-                double press = Math.Max(0, Math.Min(1, depth));
-                wrists[side].ScaleY = 1 + .30 * press;
-                keyTravel[side].Y = 4 * press;
-                strikeKeys[side].Background = press >= .55 ? Pressed : Key;
+                depth = Math.Max(0, Math.Min(1, depth));
+                SetDepth(LeftDepth, left ? depth : 0);
+                SetDepth(RightDepth, left ? 0 : depth);
+                InvalidateVisual();
+            }
+
+            private void SetDepth(DependencyProperty property, double depth)
+            {
+                BeginAnimation(property, null);
+                SetValue(property, depth);
+            }
+
+            private static DoubleAnimationUsingKeyFrames Pulse(bool compressed)
+            {
+                var pulse = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
+                if (!compressed) pulse.KeyFrames.Add(new LinearDoubleKeyFrame(.16, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+                pulse.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(compressed ? 0 : 36))));
+                pulse.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(compressed ? 25 : 63))));
+                pulse.KeyFrames.Add(new SplineDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(compressed ? 93 : 158)), new KeySpline(.22, 0, .35, 1)));
+                pulse.Freeze();
+                return pulse;
+            }
+
+            protected override void OnRender(DrawingContext dc)
+            {
+                base.OnRender(dc);
+                dc.DrawDrawing(Board);
+                double leftDepth = (double)GetValue(LeftDepth), rightDepth = (double)GetValue(RightDepth);
+                double latestDepth = left ? leftDepth : rightDepth;
+                Keycap latestTarget = left ? leftTarget : rightTarget;
+                if (!anonymous && latestTarget != null && latestDepth > .1)
+                    DrawKey(dc, latestTarget, Pressed, latestDepth * 2);
+                DrawPaw(dc, true, leftTarget, leftDepth);
+                DrawPaw(dc, false, rightTarget, rightDepth);
+            }
+
+            private static void DrawPaw(DrawingContext dc, bool isLeft, Keycap target, double depth)
+            {
+                double shoulder = isLeft ? 332 : 415;
+                double home = isLeft ? 344 : 402, x = home, y = 418;
+                if (depth > 0 && target != null)
+                {
+                    var cap = target.Bounds;
+                    x += (cap.X + cap.Width / 2 - home) * depth;
+                    y += (cap.Y + cap.Height / 2 - 418) * depth;
+                }
+                // The shoulder gives slightly on contact. The open contour joins the original black torso.
+                double rootY = 383 + 4 * depth;
+                var fur = new StreamGeometry();
+                using (var path = fur.Open())
+                {
+                    path.BeginFigure(new Point(shoulder - 8, rootY), true, false);
+                    path.BezierTo(new Point(shoulder - 14, rootY + 16), new Point(x - 13, y - 21), new Point(x - 12, y - 10), true, true);
+                    path.BezierTo(new Point(x - 11, y + 2), new Point(x + 7, y + 4), new Point(x + 11, y - 5), true, true);
+                    path.BezierTo(new Point(x + 15, y - 15), new Point(shoulder + 10, rootY + 15), new Point(shoulder + 8, rootY + 2), true, true);
+                }
+                dc.DrawGeometry(Ink, FurEdge, fur);
             }
         }
     }
