@@ -16,6 +16,7 @@ namespace Xiaohei
             private sealed class Keycap
             {
                 internal Rect Bounds;
+                internal Point Center { get { return new Point(Bounds.X + Bounds.Width / 2, Bounds.Y + Bounds.Height / 2); } }
                 internal Brush Fill;
                 internal Geometry Legend;
             }
@@ -39,12 +40,11 @@ namespace Xiaohei
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
             private static readonly DependencyProperty RightDepth = DependencyProperty.Register("RightDepth", typeof(double),
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
-            private static readonly DependencyProperty TailDepth = DependencyProperty.Register("TailDepth", typeof(double),
-                typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender,
-                    (d, e) => ((TypingKeyboard)d).BendTailTip()));
-            private static readonly DependencyProperty TailAim = DependencyProperty.Register("TailAim", typeof(Point),
-                typeof(TypingKeyboard), new FrameworkPropertyMetadata(new Point(), FrameworkPropertyMetadataOptions.AffectsRender,
-                    (d, e) => ((TypingKeyboard)d).BendTailTip()));
+            // The aim can move between two keycaps while the same paw stays extended.
+            private static readonly DependencyProperty LeftAim = DependencyProperty.Register("LeftAim", typeof(Point),
+                typeof(TypingKeyboard), new FrameworkPropertyMetadata(new Point(344, 418), FrameworkPropertyMetadataOptions.AffectsRender));
+            private static readonly DependencyProperty RightAim = DependencyProperty.Register("RightAim", typeof(Point),
+                typeof(TypingKeyboard), new FrameworkPropertyMetadata(new Point(402, 418), FrameworkPropertyMetadataOptions.AffectsRender));
             private static readonly DependencyProperty MouseReach = DependencyProperty.Register("MouseReach", typeof(double),
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
             private static readonly DependencyProperty WheelFlash = DependencyProperty.Register("WheelFlash", typeof(double),
@@ -52,37 +52,22 @@ namespace Xiaohei
             private static readonly DependencyProperty ClickFlash = DependencyProperty.Register("ClickFlash", typeof(double),
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
             private static readonly DoubleAnimationUsingKeyFrames Stroke = Pulse(false), FastStroke = Pulse(true);
-            private static readonly DoubleAnimationUsingKeyFrames TailStroke = Pulse(false, 1.65);
 
             private readonly bool motion;
-            private bool motionActive = true;
             private readonly Border hint;
             private readonly TextBlock letter;
             private readonly TranslateTransform hintLift = new TranslateTransform();
-            private Keycap leftTarget, rightTarget, tailTarget, litKey;
-            private bool left, anonymous, mouseDown, mousing, idlePawRaised;
+            private Keycap litKey;
+            private bool left, anonymous, mouseDown, mousing, contactDrawn;
             private int wheelDirection, mouseButtons, pulseButtons;
             private Point mouse = new Point(601, 466);
             private double leftWeight = 1, rightWeight = 1;
-            private readonly Stopwatch sinceMouse = new Stopwatch(), sinceLeft = new Stopwatch();
-            private Canvas seatedTail;
-            private System.Windows.Shapes.Path tailTip;
-            private Geometry restingTip;
-            private double restingTipWidth;
-            private readonly Pen tipEdge = FurEdge.Clone();
-            private readonly RotateTransform tailSwing = new RotateTransform(0, 430, 420);
-            private readonly RotateTransform tailThump = new RotateTransform(0, 430, 420);
+            private readonly Stopwatch sinceMouse = new Stopwatch();
             private DependencyProperty latestDepth = LeftDepth;
             private string heldKey;
             private DependencyProperty heldDepth;
             internal bool IsKeyHeld { get { return heldKey != null; } }
             internal double StrikeSide { get; private set; }
-            internal bool IdlePawRaised
-            {
-                get { return idlePawRaised; }
-                set { if (idlePawRaised != value) { idlePawRaised = value; InvalidateVisual(); } }
-            }
-
             internal TypingKeyboard(bool motion)
             {
                 this.motion = motion;
@@ -96,59 +81,6 @@ namespace Xiaohei
                     RenderTransform = hintLift,
                     Padding = new Thickness(6, 0, 6, 2), Child = new Viewbox { Stretch = Stretch.Uniform, Child = letter } };
                 Children.Add(hint);
-                Loaded += delegate { SwingTail(); };
-                Unloaded += delegate {
-                    tailSwing.BeginAnimation(RotateTransform.AngleProperty, null);
-                    tailThump.BeginAnimation(RotateTransform.AngleProperty, null);
-                };
-            }
-
-            internal void AttachTail(Canvas tail, Canvas leftTip)
-            {
-                seatedTail = tail;
-                tailTip = (System.Windows.Shapes.Path)leftTip.Children[0];
-                restingTip = tailTip.Data;
-                restingTipWidth = tailTip.StrokeThickness;
-                var turns = new TransformGroup();
-                turns.Children.Add(tailSwing);
-                turns.Children.Add(tailThump);
-                tail.RenderTransform = turns;
-                BendTailTip();
-                if (IsLoaded) SwingTail();
-            }
-
-            private void SwingTail()
-            {
-                if (!motion || !motionActive || !IsLoaded || seatedTail == null) return;
-                var ease = new SineEase { EasingMode = EasingMode.EaseInOut };
-                var sway = new DoubleAnimationUsingKeyFrames { RepeatBehavior = RepeatBehavior.Forever };
-                sway.KeyFrames.Add(new EasingDoubleKeyFrame(3, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(1.05)), ease));
-                sway.KeyFrames.Add(new EasingDoubleKeyFrame(-2.5, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(3.15)), ease));
-                sway.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(4.2)), ease));
-                tailSwing.BeginAnimation(RotateTransform.AngleProperty, sway);
-            }
-
-            internal void SetMotionActive(bool value)
-            {
-                if (motionActive == value) return;
-                motionActive = value;
-                if (value) SwingTail();
-                else
-                {
-                    tailSwing.BeginAnimation(RotateTransform.AngleProperty, null);
-                    tailThump.BeginAnimation(RotateTransform.AngleProperty, null);
-                }
-            }
-
-            internal void ThumpTail()
-            {
-                if (!motion || !motionActive || seatedTail == null || (double)GetValue(TailDepth) > .015 || (latestDepth == TailDepth && litKey != null)) return;
-                var tap = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
-                tap.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-                tap.KeyFrames.Add(new SplineDoubleKeyFrame(-12, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(90)), new KeySpline(.2, .8, .4, 1)));
-                tap.KeyFrames.Add(new LinearDoubleKeyFrame(8, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(155))));
-                tap.KeyFrames.Add(new SplineDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(300)), new KeySpline(.2, .8, .4, 1)));
-                tailThump.BeginAnimation(RotateTransform.AngleProperty, tap);
             }
 
             private static Pen MakePen(Brush color, double size)
@@ -253,37 +185,23 @@ namespace Xiaohei
                 {
                     SetDepth(LeftDepth, 0);
                     SetDepth(RightDepth, 0);
-                    SetDepth(TailDepth, 0);
-                    leftTarget = rightTarget = tailTarget = null;
+                    BeginAnimation(LeftAim, null);
+                    BeginAnimation(RightAim, null);
                 }
                 anonymous = cap == null;
                 if (anonymous) cap = Keys[left ? "J" : "F"];
                 bool mouseBusy = mousing && (mouseDown || sinceMouse.ElapsedMilliseconds < 320);
-                bool special = key == "Space" || key == "Enter" || key == "Bksp" || key == "Esc";
-                bool thirdHand = mouseBusy && mouseDown && sinceLeft.IsRunning && sinceLeft.ElapsedMilliseconds < 125;
                 if (!mouseBusy && mousing) { mousing = false; SetDepth(MouseReach, 0); }
-                left = mouseBusy || cap.Bounds.X + cap.Bounds.Width / 2 < 377;
-                StrikeSide = special || (thirdHand && !anonymous) ? 0 : left ? -1 : 1;
-                latestDepth = StrikeSide == 0 ? TailDepth : left ? LeftDepth : RightDepth;
+                var target = cap.Center;
+                left = mouseBusy || target.X < 377;
+                StrikeSide = left ? -1 : 1;
+                latestDepth = left ? LeftDepth : RightDepth;
                 litKey = anonymous ? null : cap;
-                if (StrikeSide == 0)
-                {
-                    Point start = (Point)GetValue(TailAim), target = Center(cap);
-                    bool crossing = tailTarget != null && start != target && (double)GetValue(TailDepth) > .01;
-                    tailTarget = cap;
-                    BeginAnimation(TailAim, null);
-                    SetValue(TailAim, target);
-                    if (motion && crossing)
-                        BeginAnimation(TailAim, new PointAnimation(start, target, TimeSpan.FromMilliseconds(68))
-                            { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop });
-                    tailThump.BeginAnimation(RotateTransform.AngleProperty, null);
-                }
-                else
-                {
-                    double weight = key == "Tab" || key == "Shift" || key == "Ctrl" ? 1.25 : animateStroke ? 1.0 : .8;
-                    if (left) { leftTarget = cap; leftWeight = weight; sinceLeft.Restart(); }
-                    else { rightTarget = cap; rightWeight = weight; }
-                }
+                contactDrawn = false;
+                AimPaw(left ? LeftAim : RightAim, latestDepth, target);
+                double weight = key == "Tab" || key == "Shift" || key == "Ctrl" ? 1.25 : animateStroke ? 1.0 : .8;
+                if (left) leftWeight = weight;
+                else rightWeight = weight;
                 letter.Text = key ?? "";
                 hint.Visibility = anonymous ? Visibility.Hidden : Visibility.Visible;
                 if (!anonymous)
@@ -297,17 +215,7 @@ namespace Xiaohei
                         new DoubleAnimation(animateStroke ? 9 : 4, 0, TimeSpan.FromMilliseconds(155))
                         { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.Stop });
                 }
-                if (motion)
-                {
-                    var stroke = animateStroke ? Stroke : FastStroke;
-                    if (StrikeSide == 0)
-                    {
-                        stroke = TailStroke.Clone();
-                        stroke.KeyFrames[0].Value = (double)GetValue(TailDepth);
-                    }
-                    SetValue(latestDepth, 0.0);
-                    BeginAnimation(latestDepth, stroke);
-                }
+                if (motion) Tap(latestDepth, animateStroke ? Stroke : FastStroke);
                 else
                     SetPressDepth(1);
                 InvalidateVisual();
@@ -326,13 +234,15 @@ namespace Xiaohei
                 if (heldKey == null || (key != null && key != heldKey)) return;
                 heldKey = null;
                 double depth = (double)GetValue(heldDepth);
-                if (motion && key != null && heldDepth == TailDepth && depth < .94)
+                // A key pressed and released between display frames should still get a full tap.
+                if (motion && key != null && depth < .94) Tap(heldDepth, Stroke);
+                else if (!motion && key != null && !contactDrawn)
                 {
-                    // Even a make/break pair between display frames gets one complete tap.
-                    var tap = TailStroke.Clone();
-                    tap.KeyFrames[0].Value = depth;
-                    SetValue(TailDepth, 0.0);
-                    BeginAnimation(TailDepth, tap);
+                    // Hold one static pose for a short tap when Windows animations are off.
+                    SetDepth(heldDepth, 1);
+                    var lift = new DoubleAnimationUsingKeyFrames();
+                    lift.KeyFrames.Add(new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(70))));
+                    BeginAnimation(heldDepth, lift);
                 }
                 else AnimateTo(heldDepth, 0, 110);
                 heldDepth = null;
@@ -342,6 +252,29 @@ namespace Xiaohei
                     letter.Text = "";
                     hint.Visibility = Visibility.Hidden;
                 }
+            }
+
+            private void AimPaw(DependencyProperty aim, DependencyProperty depth, Point target)
+            {
+                var from = (Point)GetValue(aim);
+                BeginAnimation(aim, null);
+                SetValue(aim, target);
+                if (motion && from != target && (double)GetValue(depth) > .05)
+                    BeginAnimation(aim, new PointAnimation(from, target, TimeSpan.FromMilliseconds(44))
+                        { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }, FillBehavior = FillBehavior.Stop });
+            }
+
+            private void Tap(DependencyProperty depth, DoubleAnimationUsingKeyFrames timing)
+            {
+                var stroke = timing;
+                double current = (double)GetValue(depth);
+                if (current > .001)
+                {
+                    stroke = timing.Clone();
+                    stroke.KeyFrames[0].Value = current;
+                }
+                SetValue(depth, 0.0);
+                BeginAnimation(depth, stroke);
             }
 
             private void AnimateTo(DependencyProperty property, double value, int milliseconds)
@@ -366,7 +299,7 @@ namespace Xiaohei
                     if (IsKeyHeld && heldDepth == RightDepth)
                     {
                         // Keep holding the actual key with the free paw when the right paw reaches for the mouse.
-                        leftTarget = rightTarget;
+                        AimPaw(LeftAim, LeftDepth, litKey.Center);
                         leftWeight = rightWeight;
                         heldDepth = latestDepth = LeftDepth;
                         AnimateTo(LeftDepth, 1, 75);
@@ -401,22 +334,20 @@ namespace Xiaohei
 
             internal void Rest()
             {
-                tailThump.BeginAnimation(RotateTransform.AngleProperty, null);
                 heldKey = null;
                 heldDepth = null;
-                leftTarget = rightTarget = tailTarget = litKey = null;
-                BeginAnimation(TailAim, null);
+                litKey = null;
+                BeginAnimation(LeftAim, null);
+                BeginAnimation(RightAim, null);
                 SetDepth(LeftDepth, 0);
                 SetDepth(RightDepth, 0);
-                SetDepth(TailDepth, 0);
                 SetDepth(MouseReach, 0);
                 SetDepth(WheelFlash, 0);
                 SetDepth(ClickFlash, 0);
                 mouseButtons = pulseButtons = 0;
                 mouse = new Point(601, 466);
-                mousing = mouseDown = anonymous = IdlePawRaised = false;
+                mousing = mouseDown = anonymous = false;
                 sinceMouse.Reset();
-                sinceLeft.Reset();
                 StrikeSide = 0;
                 letter.Text = "";
                 hint.Visibility = Visibility.Hidden;
@@ -429,7 +360,6 @@ namespace Xiaohei
                 depth = Math.Max(0, Math.Min(1, depth));
                 SetDepth(LeftDepth, latestDepth == LeftDepth ? depth : 0);
                 SetDepth(RightDepth, latestDepth == RightDepth ? depth : 0);
-                SetDepth(TailDepth, latestDepth == TailDepth ? depth : 0);
                 InvalidateVisual();
             }
 
@@ -439,13 +369,13 @@ namespace Xiaohei
                 SetValue(property, depth);
             }
 
-            private static DoubleAnimationUsingKeyFrames Pulse(bool compressed, double durationScale = 1)
+            private static DoubleAnimationUsingKeyFrames Pulse(bool compressed)
             {
                 var pulse = new DoubleAnimationUsingKeyFrames { FillBehavior = FillBehavior.Stop };
-                if (!compressed) pulse.KeyFrames.Add(new LinearDoubleKeyFrame(.16, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-                pulse.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds((compressed ? 0 : 36) * durationScale))));
-                pulse.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds((compressed ? 25 : 63) * durationScale))));
-                pulse.KeyFrames.Add(new SplineDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds((compressed ? 93 : 158) * durationScale)), new KeySpline(.22, 0, .35, 1)));
+                pulse.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+                pulse.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(compressed ? 20 : 36))));
+                pulse.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(compressed ? 43 : 63))));
+                pulse.KeyFrames.Add(new SplineDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(compressed ? 102 : 158)), new KeySpline(.22, 0, .35, 1)));
                 pulse.Freeze();
                 return pulse;
             }
@@ -455,28 +385,15 @@ namespace Xiaohei
                 base.OnRender(dc);
                 dc.DrawDrawing(Board);
                 double leftDepth = (double)GetValue(LeftDepth), rightDepth = (double)GetValue(RightDepth);
-                double keyDepth = (double)GetValue(latestDepth), tailDepth = (double)GetValue(TailDepth);
+                double keyDepth = (double)GetValue(latestDepth);
+                if (litKey != null && keyDepth >= .94) contactDrawn = true;
                 if (litKey != null && keyDepth > .1) DrawKey(dc, litKey, Pressed, keyDepth * 2);
                 DrawMouse(dc);
-                if (tailTip != null && tailTarget != null && tailDepth > 0)
-                {
-                    // The bent tip already sits behind the cat. Bring only its keyboard contact in front of the deck.
-                    dc.PushClip(BoardOutline);
-                    dc.PushOpacity(Math.Min(1, tailDepth * 3));
-                    dc.DrawGeometry(Ink, tipEdge, tailTip.Data);
-                    dc.Pop();
-                    dc.Pop();
-                }
-                if (!IdlePawRaised) DrawPaw(dc, true, Center(leftTarget), leftDepth, leftWeight);
+                DrawPaw(dc, true, (Point)GetValue(LeftAim), leftDepth, leftWeight);
                 if (mousing)
                     DrawPaw(dc, false, new Point(mouse.X + ((mouseButtons & 2) != 0 ? 4 : -8), mouse.Y + (mouseDown ? 9 : 3)),
                         (double)GetValue(MouseReach), mouseDown ? 1.3 : .75);
-                else DrawPaw(dc, false, Center(rightTarget), rightDepth, rightWeight);
-            }
-
-            private static Point Center(Keycap cap)
-            {
-                return cap == null ? new Point() : new Point(cap.Bounds.X + cap.Bounds.Width / 2, cap.Bounds.Y + cap.Bounds.Height / 2);
+                else DrawPaw(dc, false, (Point)GetValue(RightAim), rightDepth, rightWeight);
             }
 
             private static readonly Geometry MouseShell = Geometry.Parse("M -22,4 C -25,-7 -18,-22 -7,-26 C 6,-31 18,-23 22,-9 C 26,5 23,19 12,24 C -1,30 -16,23 -22,4 Z");
@@ -504,46 +421,6 @@ namespace Xiaohei
                     dc.Pop();
                 }
                 dc.Pop();
-            }
-
-            private static Point BendPoint(double x, double y, double endX, double endY, double depth)
-            {
-                return new Point(x + (endX - x) * depth, y + (endY - y) * depth);
-            }
-
-            private void BendTailTip()
-            {
-                if (tailTip == null) return;
-                double depth = (double)GetValue(TailDepth);
-                double unfold = Math.Min(1, depth * 2.5);
-                tailTip.StrokeThickness = tipEdge.Thickness = restingTipWidth + (5 - restingTipWidth) * unfold;
-                if (depth <= 0 || tailTarget == null) { tailTip.Data = restingTip; return; }
-                var key = (Point)GetValue(TailAim);
-                double bendX = Math.Min(244, key.X - 50), reach = key.X - bendX - 24;
-                double bendY = Math.Min(466, key.Y + Math.Min(30, reach * .18));
-                double approach = Math.Min(32, reach * .35), lift = Math.Min(15, reach * .15);
-                // Subdivide the seated tip's original cubic at one third. The folded length unfurls from that point.
-                const double foldX = 266.667, foldY = 425.111;
-                var outline = new StreamGeometry();
-                using (var p = outline.Open())
-                {
-                    p.BeginFigure(new Point(318, 402), true, true);
-                    p.BezierTo(BendPoint(297,399, 293,395, depth), BendPoint(278,391, bendX+9,391, depth),
-                        BendPoint(269,407, bendX-1,413, depth), true,true);
-                    p.BezierTo(BendPoint(265.667,413.333, bendX-16,437, depth), BendPoint(265,419.667, bendX-5,bendY+6, depth),
-                        BendPoint(foldX,foldY, bendX+24,bendY+9, depth), true,true);
-                    p.BezierTo(BendPoint(foldX,foldY, bendX+24+approach,bendY+15, depth), BendPoint(foldX,foldY, key.X-approach,key.Y-lift, depth),
-                        BendPoint(foldX,foldY, key.X-5,key.Y+5, depth), true,true);
-                    p.BezierTo(BendPoint(foldX,foldY, key.X+7,key.Y+7, depth), BendPoint(foldX,foldY, key.X+9,key.Y-6, depth),
-                        BendPoint(foldX,foldY, key.X-3,key.Y-7, depth), true,true);
-                    p.BezierTo(BendPoint(foldX,foldY, key.X-approach-1,key.Y-lift-17, depth), BendPoint(foldX,foldY, bendX+3,bendY+8, depth),
-                        BendPoint(foldX,foldY, bendX+10,435, depth), true,true);
-                    p.BezierTo(BendPoint(270,436, bendX+13,422, depth), BendPoint(282.667,443.333, 283,407, unfold),
-                        BendPoint(302,440, 302,410, unfold), true,true);
-                    p.LineTo(BendPoint(320,434,320,410,unfold), true,true);
-                }
-                outline.Freeze();
-                tailTip.Data = outline;
             }
 
             private static void DrawPaw(DrawingContext dc, bool isLeft, Point target, double depth, double weight)

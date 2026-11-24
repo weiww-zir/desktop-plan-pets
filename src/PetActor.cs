@@ -117,7 +117,6 @@ namespace Xiaohei
 
         private void ScheduleFrames()
         {
-            if (typingKeyboard != null) typingKeyboard.SetMotionActive(sessionActive && IsLoaded && IsVisible);
             if (!sessionActive || !IsLoaded || !IsVisible || !SystemParameters.ClientAreaAnimation ||
                 (Pose != PetPose.Rest && Pose != PetPose.Tilt && Pose != PetPose.Typing && Pose != PetPose.Nap))
             {
@@ -235,6 +234,7 @@ namespace Xiaohei
                 if (Pose != PetPose.Rest && Pose != PetPose.Nap && Pose != PetPose.Tilt &&
                     !(Pose == PetPose.TailKittens && automaticTailPlaying)) return;
                 Play(PetPose.Typing, TypingPauseMs);
+                if (heldButtons != 0) typingKeyboard.Mouse(pointer.MouseX, pointer.MouseY, heldButtons, 0);
             }
             bool newStroke = !sinceStroke.IsRunning || sinceStroke.ElapsedMilliseconds >= StrokeIntervalMs;
             lastKey = clock.Elapsed.TotalSeconds;
@@ -242,7 +242,6 @@ namespace Xiaohei
             typingKeyboard.Press(key, newStroke);
             if (held && key != null && !privateInput) typingKeyboard.Hold(key);
             if (privateInput) companion.PrivateInput();
-            else companion.Pulse(typingKeyboard.StrikeSide);
             if (newStroke) sinceStroke.Restart();
         }
 

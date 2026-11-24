@@ -135,7 +135,6 @@ namespace Xiaohei
             if (pose == PetPose.Typing)
             {
                 typing = typing ?? new TypingKeyboard(motion);
-                typing.AttachTail(tail, leftTip);
                 cat.Children.Add(typing);
             }
             else
@@ -180,7 +179,7 @@ namespace Xiaohei
                 return view;
             }
             if (companion != null && (pose == PetPose.Rest || pose == PetPose.Typing || pose == PetPose.Tilt))
-                companion.AttachSitting(body, face, eyes, pose == PetPose.Typing ? null : tail, earAnchor, typing);
+                companion.AttachSitting(body, face, eyes, tail, earAnchor, pose == PetPose.Typing);
             else if (motion)
             {
                 var eyelids = new Eyelids(eyes, null);
@@ -198,11 +197,11 @@ namespace Xiaohei
                 Timeline.SetDesiredFrameRate(blink, 24);
                 frame.Loaded += delegate {
                     eyelids.BeginAnimation(Eyelids.ClosureProperty, blink);
-                    tailAngle.BeginAnimation(RotateTransform.AngleProperty, flick);
+                    if (pose != PetPose.Typing) tailAngle.BeginAnimation(RotateTransform.AngleProperty, flick);
                 };
                 frame.Unloaded += delegate {
                     eyelids.BeginAnimation(Eyelids.ClosureProperty, null);
-                    tailAngle.BeginAnimation(RotateTransform.AngleProperty, null);
+                    if (pose != PetPose.Typing) tailAngle.BeginAnimation(RotateTransform.AngleProperty, null);
                 };
             }
 

@@ -33,36 +33,36 @@ namespace Xiaohei
             private double privateHold, privateLids, peekAge = 5, peekSide = 1;
             private double expressionClosure, shownClosure;
             private int nextFidget, currentFidget;
-            private double nextFidgetAt = 4.8, fidgetAge = 3, lastThump = -1;
+            private double nextFidgetAt = 4.8, fidgetAge = 3;
             private readonly List<Action<double, double, double>> flexibleEdges = new List<Action<double, double, double>>();
             private double lastLeft, lastRight, lastFold;
             private MatrixTransform posture;
             private TranslateTransform gaze, earTip;
             private Eyelids eyelids;
-            private RotateTransform tailAngle, liftedAngle;
+            private readonly RotateTransform tailAngle = new RotateTransform(0, 422, 427);
+            private RotateTransform liftedAngle;
             private Canvas lifted;
             private Canvas[] particles;
-            private TypingKeyboard workbench;
+            private bool atKeyboard;
             private bool sleeping;
 
             internal void Detach()
             {
-                if (workbench != null) workbench.IdlePawRaised = false;
-                workbench = null;
+                atKeyboard = false;
                 posture = null;
                 lifted = null;
                 particles = null;
                 gaze = earTip = null;
                 eyelids = null;
-                liftedAngle = tailAngle = null;
+                liftedAngle = null;
                 flexibleEdges.Clear();
                 RestartFidgetDelay();
             }
 
-            internal void AttachSitting(Canvas body, Canvas face, Canvas eyes, Canvas tail, FrameworkElement anchor, TypingKeyboard keyboard)
+            internal void AttachSitting(Canvas body, Canvas face, Canvas eyes, Canvas tail, FrameworkElement anchor, bool typing)
             {
                 sleeping = false;
-                workbench = keyboard;
+                atKeyboard = typing;
                 posture = new MatrixTransform();
                 var transforms = new TransformGroup();
                 if (face.RenderTransform != Transform.Identity) transforms.Children.Add(face.RenderTransform);
@@ -86,12 +86,8 @@ namespace Xiaohei
                 eyelids = new Eyelids(eyes, gaze);
                 eyelids.Set(shownClosure, happy);
 
-                tailAngle = null;
-                if (tail != null)
-                {
-                    tailAngle = new RotateTransform(0, 422, 427);
-                    tail.RenderTransform = tailAngle;
-                }
+                // Keep the current tail position when the keyboard appears or disappears.
+                tail.RenderTransform = tailAngle;
                 liftedAngle = new RotateTransform(0, 330, 401);
                 lifted = new Canvas { Opacity = 0, RenderTransform = liftedAngle };
                 body.Children.Add(lifted);
@@ -189,7 +185,6 @@ namespace Xiaohei
             internal void ResetIdle()
             {
                 RestartFidgetDelay();
-                if (workbench != null) workbench.IdlePawRaised = false;
                 if (lifted != null) lifted.Opacity = 0;
             }
 
@@ -208,11 +203,6 @@ namespace Xiaohei
                 contact = 1;
                 weight = side;
                 heat = Math.Min(1, heat + .23);
-                if (workbench != null && side != 0 && heat >= .76 && time - lastThump > .48)
-                {
-                    workbench.ThumpTail();
-                    lastThump = time;
-                }
                 lean.Velocity = Clamp(lean.Velocity + side * 11, -22, 22);
                 earLeft.Velocity = Clamp(earLeft.Velocity + 18 - side * 10, -40, 40);
                 earRight.Velocity = Clamp(earRight.Velocity - 18 - side * 10, -40, 40);
@@ -268,7 +258,7 @@ namespace Xiaohei
                 heat = Math.Max(0, heat - .77 * dt);
                 weight *= Math.Exp(-5.3 * dt);
                 happy += ((petHold > 0 ? 1 : 0) - happy) * (1 - Math.Exp(-dt * (petHold > 0 ? 12 : 5)));
-                if (idle >= nextFidgetAt)
+                if (!atKeyboard && idle >= nextFidgetAt)
                 {
                     currentFidget = nextFidget;
                     nextFidget = (nextFidget + 1) % 5;
@@ -285,7 +275,6 @@ namespace Xiaohei
                 double paw = groom + inspect;
                 double lift = paw + stretch;
                 lifted.Opacity = Clamp(lift * 4, 0, 1);
-                if (workbench != null) workbench.IdlePawRaised = lift > .11;
                 liftedAngle.Angle = (1 - lift) * -43 + groom * (6 + 8 * Math.Sin(phase * Math.PI * 5)) - inspect * 21 - stretch * 94;
 
                 double gx = Clamp(pointerX, -1, 1), gy = Clamp(pointerY, -1, 1);
@@ -325,8 +314,11 @@ namespace Xiaohei
                     lastRight = r;
                     lastFold = fold;
                 }
-                if (tailAngle != null)
-                    tailAngle.Angle = -3 * Math.Sin(time * 1.7) - 6 * interest - 4.8 * happy - 4 * contact - 4 * fidget;
+                if (!atKeyboard)
+                {
+                    double angleAtRest = -3 * Math.Sin(time * 1.7) - 6 * interest - 4.8 * happy - 4 * contact - 4 * fidget;
+                    tailAngle.Angle += (angleAtRest - tailAngle.Angle) * (1 - Math.Exp(-14 * dt));
+                }
                 DrawParticles(petTime, false);
             }
 

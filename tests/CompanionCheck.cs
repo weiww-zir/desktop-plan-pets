@@ -126,17 +126,17 @@ namespace Xiaohei
                 tracking.Pupils.Zip(seated.Pupils, (a, b) => a.Left > b.Left + 2).All(moved => moved),
                 "fast pointer tracking moves both pupils without stretching them (" + seated.Pupils[0] + " to " +
                 tracking.Pupils[0] + ", neutral white pixels " + seated.White + ")");
-            for (int i = 0; i < 8; i++) { motion.Pulse(i % 2 == 0 ? -1 : 1); motion.Tick(.033, .88, -.35, 0); }
-            var typing = new EyeFrame(scene, ear);
-            Require(!typing.HasBrow && typing.SamePupilSize(seated), "rapid typing adds no eyebrows or pupil deformation");
-            Require(typing.White < tracking.White * .97, "typing changes the visible eye opening: " + tracking.White + " to " + typing.White);
+            for (int i = 0; i < 8; i++) { motion.Pulse(1); motion.Tick(.033, .88, -.35, 0); }
+            var clicking = new EyeFrame(scene, ear);
+            Require(!clicking.HasBrow && clicking.SamePupilSize(seated), "repeated mouse clicks add no eyebrows or pupil deformation");
+            Require(clicking.White < tracking.White * .97, "mouse clicks change the visible eye opening: " + tracking.White + " to " + clicking.White);
             motion.PrivateInput();
             motion.Tick(1.0 / 60, .88, -.35, 0);
             var closing = new EyeFrame(scene, ear);
             for (int i = 0; i < 14; i++) motion.Tick(.025, .88, -.35, 0);
             var shut = new EyeFrame(scene, ear);
             Require(shut.White < seated.White * .25, "the eyelids hide the eye white in private mode: " + shut.White + "/" + seated.White);
-            Require(closing.White > shut.White + (typing.White - shut.White) * .25,
+            Require(closing.White > shut.White + (clicking.White - shut.White) * .25,
                 "the first frame of closure retains visible eye white before the lids finish closing");
             foreach (var pose in new[] { PetPose.Typing, PetPose.Rest, PetPose.Tilt })
             {
@@ -210,15 +210,26 @@ namespace Xiaohei
                 pet.Enter();
                 Wait(520);
                 Require(pet.Pose == PetPose.Tilt && VisibleKeyboard(pet) == null, "hovering tilts the cat without adding a keyboard");
+                var body = Field<PetArt.CompanionMotion>(pet, "companion");
+                double mouseHeat = Field<double>(body, "heat");
                 pet.TapKeyboard("Enter", false, true);
                 var desk = VisibleKeyboard(pet);
-                Require(desk != null && desk.IsKeyHeld && desk.StrikeSide == 0, "physical key-down brings out the keyboard and the tail holds Enter");
+                Require(desk != null && desk.IsKeyHeld && desk.StrikeSide == 1, "physical key-down brings out the keyboard and the right paw holds Enter");
+                Require(Math.Abs(mouseHeat - Field<double>(body, "heat")) < .00001, "a keystroke does not trigger the whole-body mouse reaction");
+                var groom = Field<Canvas>(body, "lifted");
+                bool groomed = false;
+                for (int i = 0; i < 195; i++)
+                {
+                    body.Tick(.033, 0, 0, 0);
+                    groomed |= groom.Opacity > .01;
+                }
+                Require(!groomed && desk.IsKeyHeld, "idle grooming never takes a paw away from a held key");
                 pet.PointerActivity(0, 0, 1, 0);
                 pet.PointerActivity(0, 0, 0, 120);
                 Wait(900);
                 Require(pet.Pose == PetPose.Typing && desk.IsKeyHeld && VisibleKeyboard(pet) == desk, "a held key survives the normal pause while using the mouse");
                 pet.ReleaseKeyboard("A");
-                Require(desk.IsKeyHeld, "releasing another key does not lift the tail");
+                Require(desk.IsKeyHeld, "releasing another key does not lift the paw");
                 pet.ReleaseKeyboard("Enter");
                 Wait(290);
                 pet.PointerActivity(90, 0, 0, 0);
