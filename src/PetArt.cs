@@ -7,7 +7,7 @@ using System.Windows.Shapes;
 
 namespace Xiaohei
 {
-    internal enum PetPose { Rest, Tilt, Wave, Hop, Nap, Stretch, Meow, TailKittens }
+    internal enum PetPose { Rest, Tilt, Wave, Hop, Nap, Stretch, Meow, TailKittens, SpiritOrbit }
 
     internal static partial class PetArt
     {
@@ -48,10 +48,15 @@ namespace Xiaohei
         internal static FrameworkElement Draw(bool animate, PetPose pose, FrameworkElement earAnchor = null)
         {
             var frame = new Canvas { Width = 480, Height = 455 };
-            var cat = new Canvas { RenderTransform = new TranslateTransform(-159, -50) };
-            frame.Children.Add(cat);
             var view = new Viewbox { Stretch = Stretch.Uniform, Child = frame };
             bool motion = animate && SystemParameters.ClientAreaAnimation;
+            if (pose == PetPose.SpiritOrbit)
+            {
+                frame.Children.Add(new SpiritOrbit(motion, earAnchor));
+                return view;
+            }
+            var cat = new Canvas { RenderTransform = new TranslateTransform(-159, -50) };
+            frame.Children.Add(cat);
             if (pose == PetPose.Meow || pose == PetPose.Nap || pose == PetPose.Stretch)
             {
                 if (pose == PetPose.Meow) { DrawMeow(cat, motion); MarkEar(cat, earAnchor, 590, 260); }

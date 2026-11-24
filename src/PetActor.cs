@@ -15,6 +15,7 @@ namespace Xiaohei
         private readonly DispatcherTimer finish = new DispatcherTimer();
         private readonly DispatcherTimer tailTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         private bool jumpAfterWave;
+        private bool tailAfterSpirits;
         private bool idleExpired;
         private readonly Decorator drawing = new Decorator();
         private FrameworkElement earAnchor;
@@ -40,13 +41,18 @@ namespace Xiaohei
             SetPose(PetPose.Rest);
             Loaded += delegate
             {
+                tailAfterSpirits = false;
                 if (Pose != PetPose.Rest) SetPose(PetPose.Rest);
                 TrackEarIfMoving();
                 RecordActivity();
                 tailTimer.Start();
             };
             Unloaded += delegate { idle.Stop(); hover.Stop(); finish.Stop(); tailTimer.Stop(); TrackEar(false); };
-            tailTimer.Tick += delegate { Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs); };
+            tailTimer.Tick += delegate
+            {
+                if (Pose == PetPose.SpiritOrbit) tailAfterSpirits = true;
+                else Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs);
+            };
             hover.Tick += delegate
             {
                 hover.Stop();
@@ -62,7 +68,12 @@ namespace Xiaohei
             finish.Tick += delegate
             {
                 finish.Stop();
-                if (Pose == PetPose.Wave && jumpAfterWave) Act(PetPose.Hop, 630);
+                if (tailAfterSpirits)
+                {
+                    tailAfterSpirits = false;
+                    Play(PetPose.TailKittens, PetArt.TailLitter.DurationMs);
+                }
+                else if (Pose == PetPose.Wave && jumpAfterWave) Act(PetPose.Hop, 630);
                 else SetPose(idleExpired ? PetPose.Nap : PetPose.Rest);
             };
         }
@@ -176,8 +187,10 @@ namespace Xiaohei
         }
 
         internal void Meow() { Act(PetPose.Meow, 1150); }
+        internal void WatchSpirits() { Act(PetPose.SpiritOrbit, PetArt.SpiritOrbit.DurationMs); }
         internal void SplitTail()
         {
+            tailAfterSpirits = false;
             tailTimer.Stop();
             tailTimer.Start();
             Act(PetPose.TailKittens, PetArt.TailLitter.DurationMs);
