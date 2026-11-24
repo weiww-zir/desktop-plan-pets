@@ -80,8 +80,9 @@ namespace Xiaohei
             Check(actor.Pose == PetPose.Typing && Caption(keyboard).Text == "T", "rebound retains the last key until the renewed pause ends");
             Until(() => actor.Pose == PetPose.Rest, "return to seated rest");
             Check(pause.ElapsedMilliseconds >= 775 && pause.ElapsedMilliseconds < 1450 &&
-                !finish.IsEnabled && Field<PetArt.TypingKeyboard>(actor, "typingKeyboard") == null,
-                "typing clears after about 800 ms from the last keystroke");
+                !finish.IsEnabled && Field<PetArt.TypingKeyboard>(actor, "typingKeyboard") == keyboard &&
+                string.IsNullOrEmpty(Caption(keyboard).Text) && keyboard.StrikeSide == 0,
+                "the same desk returns to rest with relaxed paws and a blank caption after about 800 ms");
 
             var normalIdle = idle.Interval;
             idle.Interval = TimeSpan.FromMilliseconds(35);
@@ -200,6 +201,20 @@ namespace Xiaohei
                 return Differences(raised, released, a) == 0 && Differences(raised, released, p) == 0;
             }, "both A and P rebound on their own");
             Check(Caption(keyboard).Text == "P", "animated rapid cross-hand press rebounds while P stays readable");
+            Rect enter;
+            if (!PetArt.TypingKeyboard.TryGetKeyBounds("Enter", out enter)) throw new Exception("Missing Enter key");
+            enter = transform.TransformBounds(enter);
+            keyboard.Press("Enter", true);
+            keyboard.Hold("Enter");
+            Wait(320);
+            var held = Capture(scene, width, height);
+            Check(keyboard.IsKeyHeld && keyboard.StrikeSide == 0 && Differences(raised, held, enter) > 4,
+                "tail stays on the physically held Enter key past the stroke duration");
+            keyboard.Release("A");
+            Check(keyboard.IsKeyHeld, "unrelated key-up keeps Enter held");
+            keyboard.Release("Enter");
+            Until(() => Differences(raised, Capture(scene, width, height), enter) == 0, "tail released Enter");
+            Check(!keyboard.IsKeyHeld && Caption(keyboard).Text == "Enter", "Enter release relaxes the tail and preserves the last label");
             host.Close();
         }
 
@@ -277,12 +292,91 @@ namespace Xiaohei
             }
         }
 
+        static void DeskActions()
+        {
+            const int width = 480, height = 455;
+            var keys = new PetArt.TypingKeyboard(false);
+            var scene = PetArt.Draw(false, PetPose.Typing, null, keys);
+            var neutral = Capture(scene, width, height);
+            var map = keys.TransformToAncestor(scene);
+            var board = map.TransformBounds(new Rect(198, 419, 366, 81));
+            var tail = map.TransformBounds(new Rect(454, 370, 165, 73));
+            var mouse = map.TransformBounds(new Rect(570, 430, 64, 68));
+            foreach (string key in new[] { "Space", "Enter", "Bksp", "Esc" })
+            {
+                keys.Press(key, true);
+                var down = Capture(scene, width, height);
+                Rect cap;
+                Check(keys.StrikeSide == 0 && Caption(keys).Text == key && PetArt.TypingKeyboard.TryGetKeyBounds(key, out cap) &&
+                    Differences(neutral, down, map.TransformBounds(cap)) >= 4 && Differences(neutral, down, tail) >= 180,
+                    key + " uses the tail and visibly contacts its own keycap");
+                keys.Rest();
+                Check(Differences(neutral, Capture(scene, width, height), board) == 0, key + " releases the keyboard completely");
+            }
+            keys.Press("A", true);
+            keys.Mouse(0, 0, 0, 0);
+            var reach = Capture(scene, width, height);
+            Check(keys.StrikeSide == 1 && Caption(keys).Text == "" && Differences(neutral, reach, mouse) >= 15,
+                "pointer motion clears the letter and reaches a separate mouse with the right paw");
+            keys.Rest();
+            keys.Mouse(0, 0, 1, 0);
+            var left = Capture(scene, width, height);
+            keys.Rest();
+            keys.Mouse(0, 0, 2, 0);
+            var right = Capture(scene, width, height);
+            Check(Differences(left, right, map.TransformBounds(new Rect(580, 440, 42, 26))) >= 20,
+                "left and right mouse presses light different halves of the mouse");
+            keys.Rest();
+            keys.Mouse(0, 0, 4, 1);
+            var up = Capture(scene, width, height);
+            keys.Mouse(0, 0, 4, -1);
+            var downWheel = Capture(scene, width, height);
+            Check(Differences(up, downWheel, mouse) >= 4, "wheel feedback distinguishes scroll direction");
+            keys.Press("P", true);
+            Check(keys.StrikeSide == -1 && Caption(keys).Text == "P", "left paw handles typing while right paw holds the mouse");
+            keys.Press("U", false);
+            Check(keys.StrikeSide == 0 && Caption(keys).Text == "U", "tail helps when the mouse and left paw are occupied");
+            keys.Press(null, true);
+            keys.Mouse(1, -1, 0, 0);
+            Check(Caption(keys).Text == "", "switching to anonymous input and mouse leaves no old letter");
+            keys.Rest();
+            keys.Press("A", true);
+            keys.Hold("A");
+            keys.Press("P", true);
+            keys.Hold("P");
+            keys.Release("A");
+            Check(keys.IsKeyHeld && keys.StrikeSide == 1 && Caption(keys).Text == "P", "only the latest physical hold is retained");
+            keys.Release(null);
+            Check(!keys.IsKeyHeld && Caption(keys).Text == "", "anonymous release erases a held key");
+            foreach (string heldKey in new[] { "Shift", "A", "P", "Space" })
+            {
+                keys.Rest();
+                keys.Press(heldKey, true);
+                keys.Hold(heldKey);
+                keys.Mouse(1, 1, 0, 0);
+                keys.Mouse(1, 1, 1, 0);
+                Rect cap;
+                if (!PetArt.TypingKeyboard.TryGetKeyBounds(heldKey, out cap)) throw new Exception("Missing " + heldKey);
+                var heldArea = map.TransformBounds(cap);
+                var duringClick = Capture(scene, width, height);
+                Check(keys.IsKeyHeld && Caption(keys).Text == "" && Differences(neutral, duringClick, heldArea) >= 4,
+                    heldKey + " stays physically pressed during mouse motion and a click without repeating the letter");
+                keys.Release(heldKey);
+                Check(!keys.IsKeyHeld && Differences(duringClick, Capture(scene, width, height), heldArea) >= 4,
+                    "matching key-up releases " + heldKey + " while the mouse is still held");
+            }
+            keys.Rest();
+            Check(Differences(neutral, Capture(scene, width, height), new Rect(0, 0, width, height)) == 0,
+                "keyboard, mouse, both paws and tail return to their original desk layout");
+        }
+
         [STAThread] static int Main(string[] args)
         {
             try
             {
                 var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
                 Frames(args.Length == 0 ? null : args[0]);
+                DeskActions();
                 AnimatedRebound();
                 Play();
                 app.Shutdown();

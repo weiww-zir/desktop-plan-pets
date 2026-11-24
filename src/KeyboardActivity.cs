@@ -1,13 +1,20 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Windows.Threading;
 
 namespace Xiaohei
 {
-    internal static class KeyboardActivity
+    internal sealed class KeyboardActivity : IDisposable
     {
         internal const int InputMessage = 0x00FF; // WM_INPUT
-        private const uint InputSink = 0x100, Remove = 0x01, ReadInput = 0x10000003;
-        private const uint KeyboardType = 1;
+        private const uint BackgroundWithDeviceChanges = 0x100 | 0x2000, Remove = 0x01, ReadInput = 0x10000003;
+        private const uint MouseType = 0, KeyboardType = 1;
+        private const uint DesktopSwitch = 0x0020;
+        private static KeyboardActivity mouseOwner, keyboardOwner;
+        private static readonly DesktopEventProc desktopEvent = OnDesktopSwitch;
+        private static IntPtr desktopHook;
+        private readonly PetActor actor;
+        private readonly PointerFeedback pointer;
         private const ushort BreakFlag = 1;
 
         [StructLayout(LayoutKind.Sequential)]
@@ -25,10 +32,21 @@ namespace Xiaohei
             public IntPtr Device, MessageParameter;
         }
 
-        // The renderer uses fixed keycap legends, never composed or translated text.
+        [StructLayout(LayoutKind.Explicit, Size = 24)]
+        internal struct RawMouse
+        {
+            [FieldOffset(0)] public ushort MotionFlags;
+            [FieldOffset(4)] public ushort Buttons;
+            [FieldOffset(6)] public short WheelData;
+            [FieldOffset(12)] public int DeltaX;
+            [FieldOffset(16)] public int DeltaY;
+        }
+
+        // The mouse and keyboard bodies share the native RAWINPUT union.
         [StructLayout(LayoutKind.Explicit, Size = 24)]
         private struct InputBody
         {
+            [FieldOffset(0)] public RawMouse Mouse;
             [FieldOffset(2)] public ushort Flags;
             [FieldOffset(6)] public ushort VirtualKey;
         }
@@ -107,33 +125,158 @@ namespace Xiaohei
             }
         }
 
-        internal static bool Register(IntPtr window)
+        private delegate void DesktopEventProc(IntPtr hook, uint eventType, IntPtr window, int objectId, int childId, uint thread, uint time);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetWinEventHook(uint first, uint last, IntPtr module, DesktopEventProc callback,
+            uint process, uint thread, uint flags);
+
+        [DllImport("user32.dll")]
+        private static extern bool UnhookWinEvent(IntPtr hook);
+
+        private static void OnDesktopSwitch(IntPtr hook, uint eventType, IntPtr window, int objectId, int childId, uint thread, uint time)
         {
-            var device = new RawInputDevice { UsagePage = 1, Usage = 6, Flags = InputSink, Target = window };
+            if (hook == IntPtr.Zero || hook != desktopHook || eventType != DesktopSwitch) return;
+            if (keyboardOwner != null) keyboardOwner.Reset();
+            if (mouseOwner != null && mouseOwner != keyboardOwner) mouseOwner.Reset();
+        }
+
+        private KeyboardActivity(PetActor actor)
+        {
+            this.actor = actor;
+            pointer = new PointerFeedback(actor.Dispatcher, actor.PointerActivity);
+        }
+
+        private static bool SetRegistration(ushort usage, uint flags, IntPtr window)
+        {
+            var device = new RawInputDevice { UsagePage = 1, Usage = usage, Flags = flags, Target = window };
             return RegisterRawInputDevices(ref device, 1, DeviceSize);
         }
 
-        internal static void Unregister()
+        internal static KeyboardActivity Register(IntPtr window, PetActor actor)
         {
-            var device = new RawInputDevice { UsagePage = 1, Usage = 6, Flags = Remove };
-            RegisterRawInputDevices(ref device, 1, DeviceSize);
+            if (window == IntPtr.Zero) return null;
+            var input = new KeyboardActivity(actor);
+            // A device class can fail independently. Keep either successful subscription.
+            if (SetRegistration(6, BackgroundWithDeviceChanges, window)) keyboardOwner = input;
+            if (SetRegistration(2, BackgroundWithDeviceChanges, window))
+            {
+                if (mouseOwner != null) mouseOwner.pointer.Stop();
+                mouseOwner = input;
+            }
+            if (keyboardOwner != input && mouseOwner != input) return null;
+            // One out-of-context desktop-switch event for the application's current input owners.
+            if (desktopHook == IntPtr.Zero)
+                desktopHook = SetWinEventHook(DesktopSwitch, DesktopSwitch, IntPtr.Zero, desktopEvent, 0, 0, 0);
+            return input;
         }
 
-        internal static void Receive(IntPtr input, PetActor actor, bool showKeycaps = true)
+        internal void Reset()
+        {
+            pointer.Stop();
+            if (keyboardOwner == this || mouseOwner == this) actor.ResetTransientInput();
+        }
+
+        public void Dispose()
+        {
+            pointer.Stop();
+            // Windows keeps the last HWND per device class. Closing an old pet must not unregister a newer one.
+            if (mouseOwner == this)
+            {
+                SetRegistration(2, Remove, IntPtr.Zero);
+                mouseOwner = null;
+            }
+            if (keyboardOwner == this)
+            {
+                SetRegistration(6, Remove, IntPtr.Zero);
+                keyboardOwner = null;
+            }
+            if (mouseOwner == null && keyboardOwner == null && desktopHook != IntPtr.Zero && UnhookWinEvent(desktopHook))
+                desktopHook = IntPtr.Zero;
+        }
+
+        internal void Receive(IntPtr input, bool showKeycaps = true)
         {
             InputPacket packet;
             uint capacity = PacketSize;
             uint read = GetRawInputData(input, ReadInput, out packet, ref capacity, HeaderSize);
-            if (read != UInt32.MaxValue && read >= HeaderSize + 16 &&
-                packet.Header.Type == KeyboardType && (packet.Body.Flags & BreakFlag) == 0)
+            if (read == UInt32.MaxValue) return;
+            if (mouseOwner == this && packet.Header.Type == MouseType && read >= HeaderSize + 24)
+                pointer.Receive(packet.Body.Mouse);
+            else if (keyboardOwner == this && packet.Header.Type == KeyboardType && read >= HeaderSize + 16)
                 AnimatePress(actor, packet.Header.Type, packet.Body.Flags, packet.Body.VirtualKey,
-                    showKeycaps && !NativePasswordField.IsFocused());
+                    showKeycaps && !NativePasswordField.IsFocused(), true);
         }
 
-        internal static void AnimatePress(PetActor actor, uint deviceType, ushort flags, ushort virtualKey = 0, bool showKeycaps = true)
+        internal sealed class PointerFeedback
         {
-            if (deviceType == KeyboardType && (flags & BreakFlag) == 0)
-                actor.TapKeyboard(showKeycaps ? Keycap(virtualKey) : null);
+            private readonly DispatcherTimer timer;
+            private readonly Action<int, int, int, int> notify;
+            private long deltaX, deltaY;
+
+            internal PointerFeedback(Dispatcher dispatcher, Action<int, int, int, int> notify)
+            {
+                this.notify = notify;
+                timer = new DispatcherTimer(DispatcherPriority.Input, dispatcher)
+                { Interval = TimeSpan.FromMilliseconds(33) };
+                timer.Tick += delegate { Flush(0, 0); };
+            }
+
+            internal void Receive(RawMouse mouse)
+            {
+                int native = mouse.Buttons;
+                // RAWMOUSE interleaves down/up per button. The actor takes three down bits, then three up bits.
+                int buttons = 0;
+                if ((native & 0x01) != 0) buttons |= 1;
+                if ((native & 0x04) != 0) buttons |= 2;
+                if ((native & 0x10) != 0) buttons |= 4;
+                if ((native & 0x02) != 0) buttons |= 8;
+                if ((native & 0x08) != 0) buttons |= 16;
+                if ((native & 0x20) != 0) buttons |= 32;
+                // Both wheel axes have signed deltas; high-resolution wheels need not send a full 120-unit notch.
+                int wheel = (native & 0xC00) != 0 ? mouse.WheelData : 0;
+                bool absolute = (mouse.MotionFlags & 1) != 0;
+                if (absolute)
+                {
+                    // Absolute coordinates belong to the primary or virtual desktop, not to this window.
+                    // A zero-delta refresh lets the actor use the current pointer location on either display.
+                    deltaX = deltaY = 0;
+                }
+                else
+                {
+                    deltaX += mouse.DeltaX;
+                    deltaY += mouse.DeltaY;
+                }
+                if (buttons != 0 || wheel != 0) Flush(buttons, wheel);
+                else if (!timer.IsEnabled && (absolute || mouse.DeltaX != 0 || mouse.DeltaY != 0)) timer.Start();
+            }
+
+            private void Flush(int buttons, int wheel)
+            {
+                int x = (int)Math.Max(Int32.MinValue, Math.Min(Int32.MaxValue, deltaX));
+                int y = (int)Math.Max(Int32.MinValue, Math.Min(Int32.MaxValue, deltaY));
+                Stop();
+                notify(x, y, buttons, wheel);
+            }
+
+            internal void Stop()
+            {
+                timer.Stop();
+                deltaX = deltaY = 0;
+            }
+        }
+
+        internal static void AnimatePress(PetActor actor, uint deviceType, ushort flags, ushort virtualKey = 0,
+            bool showKeycaps = true, bool held = false)
+        {
+            if (deviceType != KeyboardType) return;
+            if ((flags & BreakFlag) != 0)
+            {
+                // The actor only releases its currently held cap. An anonymous release clears it.
+                if (held) actor.ReleaseKeyboard(showKeycaps ? Keycap(virtualKey) : null);
+                return;
+            }
+            actor.TapKeyboard(showKeycaps ? Keycap(virtualKey) : null, !showKeycaps, held);
         }
     }
 }

@@ -62,8 +62,9 @@ namespace Xiaohei
         }
 
         // Coordinates are shared by all poses so the paws stay planted when the face changes.
-        internal static FrameworkElement Draw(bool animate, PetPose pose, FrameworkElement earAnchor = null, TypingKeyboard typing = null)
+        internal static FrameworkElement Draw(bool animate, PetPose pose, FrameworkElement earAnchor = null, TypingKeyboard typing = null, CompanionMotion companion = null)
         {
+            if (companion != null) companion.Detach();
             var frame = new Canvas { Width = 480, Height = 455 };
             var view = new Viewbox { Stretch = Stretch.Uniform, Child = frame };
             bool motion = animate && SystemParameters.ClientAreaAnimation;
@@ -77,7 +78,14 @@ namespace Xiaohei
             if (pose == PetPose.Meow || pose == PetPose.Nap || pose == PetPose.Stretch)
             {
                 if (pose == PetPose.Meow) { DrawMeow(cat, motion); MarkEar(cat, earAnchor, 590, 260); }
-                else if (pose == PetPose.Nap) { DrawNap(cat); MarkEar(cat, earAnchor, 419, 275); }
+                else if (pose == PetPose.Nap)
+                {
+                    var sleeper = new Canvas();
+                    cat.Children.Add(sleeper);
+                    DrawNap(sleeper);
+                    MarkEar(sleeper, earAnchor, 419, 275);
+                    if (companion != null) companion.AttachNap(cat, sleeper);
+                }
                 else { DrawStretch(cat); MarkEar(cat, earAnchor, 392, 239); }
                 return view;
             }
@@ -122,9 +130,14 @@ namespace Xiaohei
             Shape(eyes, "M 448,162 C 472,162 484,186 485,214 C 487,247 478,276 457,278 C 431,280 416,260 414,232 C 412,200 422,167 444,163 Z", Ink, 12, PupilOutline);
 
             // Rounded brush-shaped contours keep each paw legible at tray-icon sizes.
+            var face = cat;
             cat = body;
             if (pose == PetPose.Typing)
-                cat.Children.Add(typing ?? new TypingKeyboard(motion));
+            {
+                typing = typing ?? new TypingKeyboard(motion);
+                typing.AttachTail(tail);
+                cat.Children.Add(typing);
+            }
             else
             {
                 Shape(cat, "M 319,410 C 320,405 325,407 325,414 C 326,436 328,454 339,471 L 325,470 C 317,455 313,431 319,410 Z", Outline, 0);
@@ -166,12 +179,14 @@ namespace Xiaohei
                 cat.Children.Add(new TailLitter(leftTip, tail, eyes, animate));
                 return view;
             }
-            if (motion)
+            if (companion != null && (pose == PetPose.Rest || pose == PetPose.Typing || pose == PetPose.Tilt))
+                companion.AttachSitting(body, face, eyes, pose == PetPose.Typing ? null : tail, earAnchor, typing);
+            else if (motion)
             {
                 var eyelids = new ScaleTransform(1, 1, 369, 232);
                 var tailAngle = new RotateTransform(0, 422, 427);
                 eyes.RenderTransform = eyelids;
-                tail.RenderTransform = tailAngle;
+                if (pose != PetPose.Typing) tail.RenderTransform = tailAngle;
                 var blink = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromSeconds(6.3), RepeatBehavior = RepeatBehavior.Forever };
                 blink.KeyFrames.Add(new DiscreteDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(5.87))));
                 blink.KeyFrames.Add(new LinearDoubleKeyFrame(0.065, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(5.96))));

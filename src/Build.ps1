@@ -15,6 +15,6 @@ foreach ($ref in $refs) {
     if (!(Test-Path -LiteralPath $dll)) { $dll = "$framework\WPF\$ref.dll" }
     $arguments += "/reference:$dll"
 }
-$sourceFiles = @('Store.cs','HolidayCalendar.cs','PetArt.cs','TailLitter.cs','SpiritOrbit.cs','TypingKeyboard.cs','PetActor.cs','KeyboardActivity.cs','NativePasswordField.cs','PetDock.cs','PetLayout.cs','PetMenu.cs','Planner.cs','PlannerDraft.cs','PlannerWindow.cs','PetApp.cs','AssemblyInfo.cs') | ForEach-Object { Join-Path $PSScriptRoot $_ }
+$sourceFiles = @('Store.cs','HolidayCalendar.cs','PetArt.cs','TailLitter.cs','SpiritOrbit.cs','TypingKeyboard.cs','CompanionMotion.cs','PetPointer.cs','PetActor.cs','KeyboardActivity.cs','NativePasswordField.cs','PetDock.cs','PetLayout.cs','PetMenu.cs','Planner.cs','PlannerDraft.cs','PlannerWindow.cs','PetApp.cs','AssemblyInfo.cs') | ForEach-Object { Join-Path $PSScriptRoot $_ }
 & "$framework\csc.exe" @arguments @sourceFiles @ExtraSource
 exit $LASTEXITCODE

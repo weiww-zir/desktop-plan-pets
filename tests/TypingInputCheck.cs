@@ -33,7 +33,10 @@ namespace Xiaohei
         [DllImport("user32.dll")]
         private static extern IntPtr GetActiveWindow();
 
-        private static Registration[] Keyboards()
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool RegisterRawInputDevices(ref Registration device, uint count, uint size);
+
+        private static Registration[] AllRegistrations()
         {
             uint size = (uint)Marshal.SizeOf(typeof(Registration)), count = 0;
             if (GetRegisteredRawInputDevices(null, ref count, size) == UInt32.MaxValue) throw new Win32Exception();
@@ -41,7 +44,12 @@ namespace Xiaohei
             var devices = new Registration[count];
             uint actual = GetRegisteredRawInputDevices(devices, ref count, size);
             if (actual == UInt32.MaxValue) throw new Win32Exception();
-            return devices.Take((int)actual).Where(d => d.UsagePage == 1 && d.Usage == 6).ToArray();
+            return devices.Take((int)actual).ToArray();
+        }
+
+        private static Registration[] InputRegistrations()
+        {
+            return AllRegistrations().Where(d => d.UsagePage == 1 && (d.Usage == 6 || d.Usage == 2)).ToArray();
         }
 
         private static void Pump(int milliseconds)
@@ -76,6 +84,20 @@ namespace Xiaohei
                 Check(ordinary.Focus() && !NativePasswordField.IsFocused(thread), "the test's ordinary native edit field permits keycaps");
                 Check(password.Focus() && NativePasswordField.IsFocused(thread), "a focused native password field requests anonymous tapping");
                 Check(ordinary.Focus() && !NativePasswordField.IsFocused(thread), "leaving the password field clears its protected-focus state");
+                int presses = 0, releases = 0, wheel = 0;
+                ordinary.MouseDown += delegate(object sender, Forms.MouseEventArgs e) { if (e.Button == Forms.MouseButtons.Left) presses++; };
+                ordinary.MouseUp += delegate(object sender, Forms.MouseEventArgs e) { if (e.Button == Forms.MouseButtons.Left) releases++; };
+                ordinary.MouseWheel += delegate(object sender, Forms.MouseEventArgs e) { wheel += e.Delta; };
+                // Target this test control only; these legacy messages do not generate device-level WM_INPUT.
+                var point = new IntPtr((4 << 16) | 4);
+                var screen = ordinary.PointToScreen(new System.Drawing.Point(4, 4));
+                var screenPoint = new IntPtr(unchecked((screen.Y << 16) | (screen.X & 0xffff)));
+                if (!PostMessage(ordinary.Handle, 0x201, new IntPtr(1), point) ||
+                    !PostMessage(ordinary.Handle, 0x202, IntPtr.Zero, point) ||
+                    !PostMessage(ordinary.Handle, 0x20A, new IntPtr(120 << 16), screenPoint)) throw new Win32Exception();
+                Pump(80);
+                Check(ordinary.Focused && presses == 1 && releases == 1 && wheel == 120,
+                    "the focused test editor still receives its ordinary mouse press, release and wheel messages");
             }
         }
 
@@ -124,12 +146,26 @@ namespace Xiaohei
                     object header = headerField.GetValue(packet), body = bodyField.GetValue(packet);
                     KeyboardActivity.AnimatePress(actor, (uint)headerField.FieldType.GetField("Type").GetValue(header),
                         (ushort)bodyField.FieldType.GetField("Flags").GetValue(body),
-                        (ushort)bodyField.FieldType.GetField("VirtualKey").GetValue(body));
+                        (ushort)bodyField.FieldType.GetField("VirtualKey").GetValue(body), true, true);
                     Check(released ? actor.Pose == PetPose.Rest : VisibleKeycap(actor) == "Shift",
                         released ? "the marshalled fixture's break flag leaves the cat at rest" : "the marshalled make packet displays its fixed Shift cap");
                 }
             }
             finally { memory.Free(); }
+
+            var scene = Visuals(actor).OfType<PetArt.TypingKeyboard>().Single();
+            Check(scene.IsKeyHeld, "the make packet holds only the currently displayed key");
+            KeyboardActivity.AnimatePress(actor, 1, 1, 0x11, true, true);
+            Check(scene.IsKeyHeld && VisibleKeycap(actor) == "Shift", "releasing a different known key leaves the held cap unchanged");
+            KeyboardActivity.AnimatePress(actor, 1, 1, 0x10, true, true);
+            Check(!scene.IsKeyHeld, "releasing the matching key lifts the paw");
+
+            KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, true, true);
+            KeyboardActivity.AnimatePress(actor, 1, 1, 0x42, false, true);
+            Check(!scene.IsKeyHeld && VisibleKeycap(actor) == null, "a private release clears the cap without revealing a key");
+            KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, true, true);
+            KeyboardActivity.AnimatePress(actor, 1, 1, 0xE5, true, true);
+            Check(!scene.IsKeyHeld && VisibleKeycap(actor) == null, "an anonymous release also clears the single visible key");
         }
 
         private static void CheckLabelPreference(DesktopPet pet, Store store, string directory)
@@ -152,6 +188,158 @@ namespace Xiaohei
             ClickOption(option);
             Check(option.IsChecked && !new Store(directory).HideKeyLabels && VisibleKeycap(actor) == null,
                 "re-enabling keycaps persists the setting without redisplaying the previous key");
+        }
+
+        private static KeyboardActivity.RawMouse MouseFixture(ushort motion, ushort buttons, short wheel, int x, int y)
+        {
+            // Model the native byte layout without sending a synthetic input event to the user's desktop.
+            var bytes = new byte[24];
+            BitConverter.GetBytes(motion).CopyTo(bytes, 0);
+            BitConverter.GetBytes(buttons).CopyTo(bytes, 4);
+            BitConverter.GetBytes(wheel).CopyTo(bytes, 6);
+            BitConverter.GetBytes(x).CopyTo(bytes, 12);
+            BitConverter.GetBytes(y).CopyTo(bytes, 16);
+            var memory = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+            try { return (KeyboardActivity.RawMouse)Marshal.PtrToStructure(memory.AddrOfPinnedObject(), typeof(KeyboardActivity.RawMouse)); }
+            finally { memory.Free(); }
+        }
+
+        private static void CheckMouseFeedback(PetActor actor)
+        {
+            int count = 0;
+            int[] latest = null;
+            var feedback = new KeyboardActivity.PointerFeedback(actor.Dispatcher, delegate(int x, int y, int buttons, int wheel)
+            {
+                count++;
+                latest = new[] { x, y, buttons, wheel };
+                actor.PointerActivity(x, y, buttons, wheel);
+            });
+            try
+            {
+                var relative = MouseFixture(0, 0, 0, 2, -3);
+                for (int i = 0; i < 2000; i++) feedback.Receive(relative);
+                Check(count == 0, "a high-rate motion burst does not redraw per device report");
+                Pump(90);
+                Check(count == 1 && latest.SequenceEqual(new[] { 4000, -6000, 0, 0 }), "one refresh preserves the summed relative movement");
+
+                feedback.Receive(relative);
+                feedback.Receive(MouseFixture(0, 0x415, 30, 0, 0));
+                Check(count == 2 && latest.SequenceEqual(new[] { 2, -3, 7, 30 }), "three button presses and a partial wheel notch flush pending motion immediately");
+                feedback.Receive(MouseFixture(0, 0x2A, 0, 0, 0));
+                Check(count == 3 && latest.SequenceEqual(new[] { 0, 0, 56, 0 }), "left, right and middle release bits arrive immediately");
+                feedback.Receive(MouseFixture(0, 0x803, -120, 0, 0));
+                Check(count == 4 && latest.SequenceEqual(new[] { 0, 0, 9, -120 }), "a same-report press and release retains both edges and signed horizontal scroll");
+                feedback.Receive(MouseFixture(0, 0x400, -4, 0, 0));
+                Check(count == 5 && latest[3] == -4, "negative high-resolution vertical scrolling retains its direction");
+                Pump(70);
+                Check(count == 5, "immediate button and wheel feedback leaves no stale movement timer");
+
+                feedback.Receive(MouseFixture(3, 0, 0, 64000, 21000));
+                Pump(85);
+                Check(count == 6 && latest.SequenceEqual(new[] { 0, 0, 0, 0 }), "absolute virtual-desktop coordinates request a cursor refresh instead of becoming a giant relative jump");
+                feedback.Receive(relative);
+                feedback.Stop();
+                Pump(70);
+                Check(count == 6, "stopping a subscription discards its pending movement");
+                int before = count, reports = 0;
+                var duration = Stopwatch.StartNew();
+                do
+                {
+                    for (int i = 0; i < 10; i++) { feedback.Receive(relative); reports++; }
+                    Pump(4);
+                }
+                while (duration.ElapsedMilliseconds < 300);
+                duration.Stop();
+                Pump(85);
+                int frames = count - before;
+                Check(frames > 0 && frames <= Math.Ceiling(duration.Elapsed.TotalMilliseconds / 33) + 1 && frames < reports,
+                    reports + " interleaved movement reports produced " + frames + " bounded updates in " + duration.ElapsedMilliseconds + " ms");
+            }
+            finally { feedback.Stop(); }
+        }
+
+        private static IntPtr DesktopSwitchHook()
+        {
+            return (IntPtr)typeof(KeyboardActivity).GetField("desktopHook",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+        }
+
+        private static void CheckInputReset(DesktopPet pet, PetActor actor)
+        {
+            const System.Reflection.BindingFlags instance = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            var input = (KeyboardActivity)typeof(DesktopPet).GetField("input", instance).GetValue(pet);
+            var pointer = (KeyboardActivity.PointerFeedback)typeof(KeyboardActivity).GetField("pointer", instance).GetValue(input);
+            var heldButtons = typeof(PetActor).GetField("heldButtons", instance);
+            actor.PointerActivity(0, 0, 1, 0);
+            KeyboardActivity.AnimatePress(actor, 1, 0, 0x10, true, true);
+            var scene = Visuals(actor).OfType<PetArt.TypingKeyboard>().Single();
+            Check(scene.IsKeyHeld && (int)heldButtons.GetValue(actor) == 1, "the reset fixture has both a held mouse button and a held key");
+            var movement = MouseFixture(0, 0, 0, 140, 0);
+            pointer.Receive(movement);
+            input.Reset();
+            Pump(100);
+            Check(actor.Pose == PetPose.Rest && !scene.IsKeyHeld && VisibleKeycap(actor) == null && (int)heldButtons.GetValue(actor) == 0,
+                "reset releases held controls, clears their label and cancels queued motion");
+            pointer.Receive(movement);
+            Pump(85);
+            Check(actor.Pose == PetPose.Typing, "a reset subscription still delivers subsequent mouse movement");
+            input.Reset();
+            KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, true, true);
+            Check(VisibleKeycap(actor) == "A", "a new keyboard make displays normally after reset");
+            // A targeted device-removal notification exercises the window hook without disconnecting a real device.
+            if (!PostMessage(new WindowInteropHelper(pet).Handle, 0x00FE, new IntPtr(2), IntPtr.Zero)) throw new Win32Exception();
+            Pump(75);
+            Check(!scene.IsKeyHeld && actor.Pose == PetPose.Rest && VisibleKeycap(actor) == null,
+                "a device-removal message to the live pet also clears a missing release");
+
+            var hook = DesktopSwitchHook();
+            Check(hook != IntPtr.Zero, "a desktop-switch listener is active");
+            var callback = (Delegate)typeof(KeyboardActivity).GetField("desktopEvent",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).GetValue(null);
+            KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, true, true);
+            pointer.Receive(movement);
+            // Call only our boundary, never switch or broadcast an event to a desktop.
+            callback.DynamicInvoke(hook, 0x001Fu, IntPtr.Zero, 0, 0, 0u, 0u);
+            callback.DynamicInvoke(IntPtr.Zero, 0x0020u, IntPtr.Zero, 0, 0, 0u, 0u);
+            Check(scene.IsKeyHeld, "unrelated events and an invalid listener cannot reset the current input");
+            callback.DynamicInvoke(hook, 0x0020u, IntPtr.Zero, 0, 0, 0u, 0u);
+            Pump(85);
+            Check(!scene.IsKeyHeld && actor.Pose == PetPose.Rest && VisibleKeycap(actor) == null,
+                "the desktop-switch boundary clears the active key and cancels pending pointer feedback");
+        }
+
+        private static void CheckRegistrationOwnership(Window editor, PetActor actor)
+        {
+            var alternate = new Window { ShowActivated = false, ShowInTaskbar = false };
+            var unrelated = new Registration { UsagePage = 1, Usage = 4, Flags = 0x100, Target = new WindowInteropHelper(editor).Handle };
+            uint size = (uint)Marshal.SizeOf(typeof(Registration));
+            if (!RegisterRawInputDevices(ref unrelated, 1, size)) throw new Win32Exception();
+            try
+            {
+                var previous = KeyboardActivity.Register(new WindowInteropHelper(alternate).EnsureHandle(), actor);
+                var originalHook = DesktopSwitchHook();
+                var latestHandle = new WindowInteropHelper(editor).Handle;
+                using (previous)
+                using (var latest = KeyboardActivity.Register(latestHandle, actor))
+                {
+                    Check(previous != null && latest != null && KeyboardActivity.Register(IntPtr.Zero, actor) == null,
+                        "valid HWNDs register while an invalid registration leaves the current owner intact");
+                    previous.Dispose();
+                    var active = InputRegistrations();
+                    Check(active.Length == 2 && active.All(d => d.Target == latestHandle) &&
+                        originalHook != IntPtr.Zero && DesktopSwitchHook() == originalHook,
+                        "disposing the old owner leaves both input classes on the newer HWND and preserves one desktop-switch listener");
+                }
+                Check(InputRegistrations().Length == 0 && DesktopSwitchHook() == IntPtr.Zero && AllRegistrations().Any(d => d.UsagePage == 1 &&
+                    d.Usage == 4 && d.Target == unrelated.Target), "disposing the last owner removes its desktop listener and two input classes while preserving an independent usage");
+            }
+            finally
+            {
+                alternate.Close();
+                unrelated.Target = IntPtr.Zero;
+                unrelated.Flags = 1;
+                if (!RegisterRawInputDevices(ref unrelated, 1, size)) throw new Win32Exception();
+            }
         }
 
         private static void CheckKeycaps()
@@ -205,9 +393,10 @@ namespace Xiaohei
                 {
                     pet.Show();
                     var petHandle = new WindowInteropHelper(pet).Handle;
-                    var registration = Keyboards().Single();
-                    Check(registration.Target == petHandle && (registration.Flags & 0x100) != 0 && (registration.Flags & 0x30) == 0,
-                        "Windows registers the pet HWND for background keyboard input and keeps legacy messages enabled");
+                    var registrations = InputRegistrations();
+                    Check(registrations.Any(d => d.Usage == 6) && registrations.Any(d => d.Usage == 2) &&
+                        registrations.All(d => d.Target == petHandle && (d.Flags & ~0x2000u) == 0x100),
+                        "Windows registers keyboard and mouse input sinks without suppressing legacy input");
                     var actor = (PetActor)pet.Content;
                     bool down = false, up = false;
                     field.PreviewKeyDown += delegate(object sender, KeyEventArgs e) { down |= e.Key == Key.LeftShift; };
@@ -227,7 +416,8 @@ namespace Xiaohei
                     Pump(60);
                     Check(down && up && field.Text == "sample", "the editor receives a Shift press and release without inserting text");
 
-                    KeyboardActivity.Receive(IntPtr.Zero, actor);
+                    if (!PostMessage(petHandle, KeyboardActivity.InputMessage, new IntPtr(1), IntPtr.Zero)) throw new Win32Exception();
+                    Pump(20);
                     KeyboardActivity.AnimatePress(actor, 0, 0);
                     KeyboardActivity.AnimatePress(actor, 2, 0);
                     KeyboardActivity.AnimatePress(actor, 1, 3);
@@ -245,9 +435,16 @@ namespace Xiaohei
                     Check(GetActiveWindow() == editorHandle && field.IsKeyboardFocused && !pet.IsActive,
                         "the pet animation leaves the editor's keyboard focus in place");
                     CheckLabelPreference(pet, store, directory);
+                    editor.Activate();
+                    field.Focus();
+                    CheckMouseFeedback(actor);
+                    Check(GetActiveWindow() == editorHandle && field.IsKeyboardFocused && !pet.IsActive,
+                        "pointer feedback preserves the editor's focus and active window");
+                    CheckInputReset(pet, actor);
                     CheckNativeFields();
                     pet.Close();
-                    Check(Keyboards().Length == 0 && editor.IsVisible, "closing the pet unregisters its keyboard subscription while the editor stays open");
+                    Check(InputRegistrations().Length == 0 && editor.IsVisible, "closing the pet unregisters keyboard and mouse while the editor stays open");
+                    CheckRegistrationOwnership(editor, actor);
                 }
                 finally { if (pet.IsVisible) pet.Close(); editor.Close(); app.Shutdown(); }
                 return 0;
