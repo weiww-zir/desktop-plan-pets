@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 $staged = Get-Item -LiteralPath (Join-Path $PSScriptRoot '小黑手帐-更新.exe')
 $target = Get-Item -LiteralPath (Join-Path $PSScriptRoot '..\outputs\小黑手帐.exe')
-if ($staged.VersionInfo.ProductName -ne '小黑手帐' -or $staged.VersionInfo.FileVersion -ne '1.19.3.0') {
+if ($staged.VersionInfo.ProductName -ne '小黑手帐' -or $staged.VersionInfo.FileVersion -ne '1.20.0.0') {
     throw '未找到已验证的新版桌宠。'
 }
 $instances = @(Get-Process -Name '小黑手帐' -ErrorAction SilentlyContinue)

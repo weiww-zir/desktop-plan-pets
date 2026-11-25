@@ -277,7 +277,7 @@ namespace Xiaohei
                 return;
             }
             // A modifier alone, including Ctrl while resizing with the wheel, is not a typing session.
-            if (actor.Pose != PetPose.Typing &&
+            if (!actor.KeyboardVisible &&
                 ((virtualKey >= 0x10 && virtualKey <= 0x12) || virtualKey == 0x14 ||
                  virtualKey == 0x5B || virtualKey == 0x5C || (virtualKey >= 0xA0 && virtualKey <= 0xA5))) return;
             actor.TapKeyboard(showKeycaps ? Keycap(virtualKey) : null, !showKeycaps, held);

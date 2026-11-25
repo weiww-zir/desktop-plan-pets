@@ -49,6 +49,8 @@ namespace Xiaohei
             var window = new Window { Width = 190, Height = 200, Content = actor, ShowActivated = false,
                 ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Left = -9000, Top = -9000 };
             var finish = Field<DispatcherTimer>(actor, "finish");
+            var keyboardPause = Field<DispatcherTimer>(actor, "keyboardPause");
+            var mousePause = Field<DispatcherTimer>(actor, "mousePause");
             var idle = Field<DispatcherTimer>(actor, "idle");
             var hover = Field<DispatcherTimer>(actor, "hover");
             var tail = Field<DispatcherTimer>(actor, "tailTimer");
@@ -59,8 +61,8 @@ namespace Xiaohei
             actor.ShowPendingCount(3);
             actor.TapKeyboard("C");
             var keyboard = Field<PetArt.TypingKeyboard>(actor, "typingKeyboard");
-            Check(actor.Pose == PetPose.Typing && keyboard != null && Caption(keyboard).Text == "C",
-                "first keystroke immediately shows C");
+            Check(actor.Pose == PetPose.Typing && keyboard != null && keyboard.KeyboardVisible &&
+                !keyboard.MouseVisible && Caption(keyboard).Text == "C", "first keystroke immediately shows C without a mouse");
             window.UpdateLayout();
             var scene = (FrameworkElement)Field<Decorator>(actor, "drawing").Child;
             var liveTails = new TailState(scene);
@@ -86,7 +88,7 @@ namespace Xiaohei
             Check(actor.Pose == PetPose.Typing && Caption(keyboard).Text == "T", "rebound retains the last key until the renewed pause ends");
             Until(() => actor.Pose == PetPose.Rest, "return to seated rest");
             Check(pause.ElapsedMilliseconds >= 775 && pause.ElapsedMilliseconds < 1450 &&
-                !finish.IsEnabled && !Descendants<PetArt.TypingKeyboard>(actor).Any(k => k.IsVisible),
+                !keyboardPause.IsEnabled && !Descendants<PetArt.TypingKeyboard>(actor).Any(k => k.IsVisible),
                 "stopping typing removes the keyboard from the pet after about 800 ms");
 
             var normalIdle = idle.Interval;
@@ -125,10 +127,12 @@ namespace Xiaohei
             finish.Interval = TimeSpan.FromMilliseconds(40);
             Until(() => actor.Pose == PetPose.Rest, "kittens finish");
             actor.TapKeyboard();
+            actor.PointerActivity(0, 0, 0, 120);
             window.Content = null;
             Until(() => !actor.IsLoaded, "unload during typing");
             actor.TapKeyboard();
-            Check(!finish.IsEnabled && !idle.IsEnabled && !hover.IsEnabled && !tail.IsEnabled, "unloaded actor stops all its timers");
+            Check(!finish.IsEnabled && !idle.IsEnabled && !hover.IsEnabled && !tail.IsEnabled &&
+                !keyboardPause.IsEnabled && !mousePause.IsEnabled, "unloading a mixed-input actor stops both prop timers");
             window.Content = actor;
             Until(() => actor.IsLoaded && actor.Pose == PetPose.Rest, "reload without stale typing");
             window.Close();
@@ -427,8 +431,8 @@ namespace Xiaohei
             keys.Press("A", true);
             keys.Mouse(0, 0, 0, 0);
             var reach = Capture(scene, width, height);
-            Check(keys.StrikeSide == 1 && Caption(keys).Text == "" && Differences(neutral, reach, mouse) >= 15,
-                "pointer motion clears the letter and reaches a separate mouse with the right paw");
+            Check(keys.StrikeSide == 1 && Caption(keys).Text == "A" && Differences(neutral, reach, mouse) >= 15,
+                "pointer motion keeps the letter and reaches a separate mouse with the right paw");
             keys.Rest();
             keys.Mouse(0, 0, 1, 0);
             var left = Capture(scene, width, height);
@@ -476,8 +480,8 @@ namespace Xiaohei
                 if (!PetArt.TypingKeyboard.TryGetKeyBounds(heldKey, out cap)) throw new Exception("Missing " + heldKey);
                 var heldArea = map.TransformBounds(cap);
                 var duringClick = Capture(scene, width, height);
-                Check(keys.IsKeyHeld && Caption(keys).Text == "" && Differences(neutral, duringClick, heldArea) >= 4,
-                    heldKey + " stays physically pressed during mouse motion and a click without repeating the letter");
+                Check(keys.IsKeyHeld && Caption(keys).Text == heldKey && Differences(neutral, duringClick, heldArea) >= 4,
+                    heldKey + " stays labelled and physically pressed during mouse motion and a click");
                 keys.Release(heldKey);
                 Check(!keys.IsKeyHeld && Differences(duringClick, Capture(scene, width, height), heldArea) >= 4,
                     "matching key-up releases " + heldKey + " while the mouse is still held");
@@ -526,6 +530,44 @@ namespace Xiaohei
             Check(!resumed.Unchanged(), "independent seated tail motion resumes after typing");
         }
 
+        static void IndependentPropFrames()
+        {
+            const int width = 240, height = 228;
+            var desk = new PetArt.TypingKeyboard(false);
+            var scene = PetArt.Draw(false, PetPose.Typing, null, desk);
+            desk.SetKeyboardVisible(false);
+            desk.SetMouseVisible(false);
+            var bare = Capture(scene, width, height);
+            var map = desk.TransformToAncestor(scene);
+            // Inspect the left edge of the bottom key row and the lower mouse shell, clear of the paws.
+            var board = map.TransformBounds(new Rect(217, 479, 78, 15));
+            var shell = map.TransformBounds(new Rect(586, 478, 29, 12));
+            var shellBesideCat = map.TransformBounds(new Rect(488, 478, 29, 12));
+            desk.SetKeyboardVisible(true);
+            desk.Press("P", true);
+            desk.Hold("P");
+            var keyboardOnly = Capture(scene, width, height);
+            Check(Differences(bare, keyboardOnly, board) > 70 && Differences(bare, keyboardOnly, shell) == 0,
+                "keyboard-only pixels show keycaps and an empty mouse area");
+            desk.SetMouseVisible(true);
+            desk.Mouse(0, 0, 1, 0);
+            var mixed = Capture(scene, width, height);
+            Check(Differences(mixed, keyboardOnly, board) == 0 && Differences(mixed, bare, shell) > 20 &&
+                desk.IsKeyHeld && Caption(desk).Text == "P", "mixed input visibly renders both props with persistent P feedback");
+            desk.SetKeyboardVisible(false);
+            var mouseOnly = Capture(scene, width, height);
+            Check(Differences(mouseOnly, bare, board) == 0 && Differences(mouseOnly, bare, shell) == 0 &&
+                Differences(mouseOnly, bare, shellBesideCat) > 20 && !desk.IsKeyHeld && Caption(desk).Text == "",
+                "hiding the keyboard erases its caps and label and leaves one mouse beside the cat");
+            desk.SetKeyboardVisible(true);
+            desk.Press("Enter", true);
+            desk.Hold("Enter");
+            desk.SetMouseVisible(false);
+            var mouseHidden = Capture(scene, width, height);
+            Check(Differences(mouseHidden, bare, shell) == 0 && Differences(mouseHidden, keyboardOnly, board) == 0 &&
+                desk.IsKeyHeld && Caption(desk).Text == "Enter", "hiding the mouse preserves the lit keyboard and its held key");
+        }
+
         [STAThread] static int Main(string[] args)
         {
             try
@@ -533,6 +575,7 @@ namespace Xiaohei
                 var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
                 Frames(args.Length == 0 ? null : args[0]);
                 DeskActions();
+                IndependentPropFrames();
                 AnimatedRebound();
                 Play();
                 app.Shutdown();
