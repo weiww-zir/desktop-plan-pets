@@ -114,6 +114,12 @@ namespace Xiaohei
             return Visuals(actor).OfType<PetArt.TypingKeyboard>().SingleOrDefault();
         }
 
+        private static bool Showing(PetActor actor, bool keyboard, bool mouse)
+        {
+            var desk = Workbench(actor);
+            return desk == null ? !keyboard && !mouse : desk.KeyboardVisible == keyboard && desk.MouseVisible == mouse;
+        }
+
         private static string VisibleKeycap(PetActor actor)
         {
             var keyboard = Workbench(actor);
@@ -182,16 +188,19 @@ namespace Xiaohei
             var option = pet.ContextMenu.Items.OfType<MenuItem>().Single(item => (string)item.Header == "显示按下的键");
             Check(option.IsCheckable && option.IsChecked == !store.HideKeyLabels, "the pet menu reflects the stored keycap preference");
             KeyboardActivity.AnimatePress(actor, 1, 0, 0x41);
-            Check(VisibleKeycap(actor) == "A", "a known fixture key displays one current keycap");
+            Check(Showing(actor, true, false) && VisibleKeycap(actor) == "A", "a known key shows only the keyboard and its current keycap");
             KeyboardActivity.AnimatePress(actor, 1, 0, 0xE5);
-            Check(actor.Pose == PetPose.Typing && VisibleKeycap(actor) == null, "an unrecognized IME key clears the previous legend");
+            Check(Showing(actor, true, false) && VisibleKeycap(actor) == null, "an unrecognized IME key clears the previous legend on the keyboard");
             KeyboardActivity.AnimatePress(actor, 1, 0, 0x10);
             Check(VisibleKeycap(actor) == "Shift", "a new key after an anonymous tap displays only its own legend");
+            actor.PointerActivity(0, 0, 0, 120);
+            Check(Showing(actor, true, true) && VisibleKeycap(actor) == "Shift",
+                "scrolling adds the mouse and preserves the current keyboard legend");
             ClickOption(option);
-            Check(!option.IsChecked && actor.Pose == PetPose.Rest && VisibleKeycap(actor) == null && new Store(directory).HideKeyLabels,
-                "turning off keycaps clears the active illustration immediately and persists the setting");
+            Check(!option.IsChecked && Showing(actor, false, true) && VisibleKeycap(actor) == null && new Store(directory).HideKeyLabels,
+                "turning off keycaps clears keyboard feedback and preserves the active mouse");
             KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, !store.HideKeyLabels);
-            Check(actor.Pose == PetPose.Typing && VisibleKeycap(actor) == null, "typing still animates anonymously with keycaps disabled");
+            Check(Showing(actor, true, true) && VisibleKeycap(actor) == null, "anonymous typing can accompany mouse activity without a legend");
             ClickOption(option);
             Check(option.IsChecked && !new Store(directory).HideKeyLabels && VisibleKeycap(actor) == null,
                 "re-enabling keycaps persists the setting without redisplaying the previous key");
@@ -223,11 +232,23 @@ namespace Xiaohei
             });
             try
             {
+                actor.ResetTransientInput();
+                KeyboardActivity.AnimatePress(actor, 1, 0, 0x4B, true, true);
+                feedback.Receive(MouseFixture(0, 0, 0, 1, 1));
+                Pump(90);
+                Check(Showing(actor, true, false) && VisibleKeycap(actor) == "K", "one raw mouse jitter report during typing keeps the keyboard alone");
+                Pump(500);
+                feedback.Receive(MouseFixture(0, 0, 0, 4, 0));
+                Pump(75);
+                Check(Showing(actor, true, false) && Workbench(actor).IsKeyHeld, "small pointer jitter during a long key hold leaves the mouse hidden");
+                actor.ResetTransientInput();
+                count = 0;
                 var relative = MouseFixture(0, 0, 0, 2, -3);
                 for (int i = 0; i < 2000; i++) feedback.Receive(relative);
                 Check(count == 0, "a high-rate motion burst does not redraw per device report");
                 Pump(90);
                 Check(count == 1 && latest.SequenceEqual(new[] { 4000, -6000, 0, 0 }), "one refresh preserves the summed relative movement");
+                Check(Showing(actor, false, true), "a coalesced raw motion burst brings out only the mouse");
 
                 feedback.Receive(relative);
                 feedback.Receive(MouseFixture(0, 0x415, 30, 0, 0));
@@ -281,26 +302,30 @@ namespace Xiaohei
             var sample = typeof(PetPointer).GetField("screenPoint", instance);
             KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, true, true);
             actor.PointerActivity(0, 0, 1, 0);
-            Check(Workbench(actor).IsKeyHeld && (int)heldButtons.GetValue(actor) == 1,
+            Check(Showing(actor, true, true) && Workbench(actor).IsKeyHeld && (int)heldButtons.GetValue(actor) == 1,
                 "the reset fixture has both a held mouse button and a held key");
             var movement = MouseFixture(0, 0, 0, 140, 0);
             pointer.Receive(movement);
             input.Reset();
             Pump(100);
             Check(actor.Pose == PetPose.Rest && Workbench(actor) == null && (int)heldButtons.GetValue(actor) == 0 && sample.GetValue(pointerState) == null,
-                "reset releases held controls, removes the keyboard and cancels queued motion");
+                "reset releases both held controls, removes their props and cancels queued motion");
+            KeyboardActivity.AnimatePress(actor, 1, 1, 0x41, true, true);
+            pointer.Receive(MouseFixture(0, 0x02, 0, 0, 0));
+            Check(Showing(actor, false, false), "stale key and mouse releases cannot resurrect props after reset");
             pointer.Receive(movement);
             Pump(85);
-            Check(sample.GetValue(pointerState) != null && actor.Pose != PetPose.Typing && Workbench(actor) == null,
-                "a reset subscription still receives mouse movement without opening the keyboard");
+            Check(sample.GetValue(pointerState) != null && Showing(actor, false, true),
+                "mouse movement after reset shows the mouse alone");
             input.Reset();
             KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, true, true);
-            Check(VisibleKeycap(actor) == "A", "a new keyboard make displays normally after reset");
+            Check(Showing(actor, true, false) && VisibleKeycap(actor) == "A", "a new keyboard make after reset shows the keyboard alone");
+            actor.PointerActivity(0, 0, 1, 0);
             // A targeted device-removal notification exercises the window hook without disconnecting a real device.
             if (!PostMessage(new WindowInteropHelper(pet).Handle, 0x00FE, new IntPtr(2), IntPtr.Zero)) throw new Win32Exception();
             Pump(75);
             Check(actor.Pose == PetPose.Rest && Workbench(actor) == null,
-                "a device-removal message to the live pet also clears a missing release");
+                "a device-removal message clears both props even when a release is missing");
 
             var hook = DesktopSwitchHook();
             Check(hook != IntPtr.Zero, "a desktop-switch listener is active");
@@ -315,7 +340,24 @@ namespace Xiaohei
             callback.DynamicInvoke(hook, 0x0020u, IntPtr.Zero, 0, 0, 0u, 0u);
             Pump(85);
             Check(actor.Pose == PetPose.Rest && Workbench(actor) == null && sample.GetValue(pointerState) == null,
-                "the desktop-switch boundary removes the keyboard and cancels pending pointer feedback");
+                "the desktop-switch boundary removes the props and cancels pending pointer feedback");
+
+            // Target only the pet's test window. This exercises its session hook without locking Windows.
+            var handle = new WindowInteropHelper(pet).Handle;
+            KeyboardActivity.AnimatePress(actor, 1, 0, 0x41, true, true);
+            pointer.Receive(MouseFixture(0, 0x01, 0, 0, 0));
+            if (!PostMessage(handle, 0x02B1, new IntPtr(7), IntPtr.Zero)) throw new Win32Exception();
+            Pump(40);
+            KeyboardActivity.AnimatePress(actor, 1, 0, 0x42, true, true);
+            pointer.Receive(MouseFixture(0, 0x400, 120, 0, 0));
+            Check(Showing(actor, false, false) && VisibleKeycap(actor) == null, "locking clears both held devices and ignores further key and wheel input");
+            if (!PostMessage(handle, 0x02B1, new IntPtr(8), IntPtr.Zero)) throw new Win32Exception();
+            Pump(40);
+            pointer.Receive(MouseFixture(0, 0x02, 0, 0, 0));
+            KeyboardActivity.AnimatePress(actor, 1, 1, 0x41, true, true);
+            Check(Showing(actor, false, false), "unlocking and receiving the stale releases keeps both props hidden");
+            pointer.Receive(MouseFixture(0, 0x400, 120, 0, 0));
+            Check(Showing(actor, false, true), "the first wheel event after unlocking shows only the mouse");
         }
 
         private static void CheckRegistrationOwnership(Window editor, PetActor actor)
@@ -442,15 +484,17 @@ namespace Xiaohei
                     KeyboardActivity.AnimatePress(actor, 1, 0, 0x11, false, true);
                     actor.PointerActivity(0, 0, 0, 120);
                     KeyboardActivity.AnimatePress(actor, 1, 1, 0x11, false, true);
-                    Check(actor.Pose != PetPose.Typing && Workbench(actor) == null,
-                        "Ctrl plus wheel keeps the keyboard hidden even when labels are disabled");
+                    Check(Showing(actor, false, true), "Ctrl plus wheel shows only the mouse even when labels are disabled");
+                    KeyboardActivity.AnimatePress(actor, 1, 0, 0x10, true, true);
+                    KeyboardActivity.AnimatePress(actor, 1, 1, 0x10, true, true);
+                    Check(Showing(actor, false, true), "Shift during a mouse-only session does not reveal the keyboard");
                     KeyboardActivity.AnimatePress(actor, 1, 0);
-                    Check(actor.Pose == PetPose.Typing && Workbench(actor) != null, "a decoded keyboard make opens the keyboard without any key identifier");
+                    Check(Showing(actor, true, true), "a decoded key make adds the keyboard to an active mouse without a key identifier");
                     Pump(400);
                     KeyboardActivity.AnimatePress(actor, 1, 2);
                     var elapsed = Stopwatch.StartNew();
                     Pump(580);
-                    Check(actor.Pose == PetPose.Typing, "another keyboard make extends the current typing interval");
+                    Check(Showing(actor, true, false), "another keyboard make extends only the keyboard interval");
                     while (actor.Pose == PetPose.Typing && elapsed.ElapsedMilliseconds < 1100) Pump(10);
                     Check(actor.Pose == PetPose.Rest && Workbench(actor) == null && elapsed.ElapsedMilliseconds >= 650 && elapsed.ElapsedMilliseconds <= 1000,
                         "the pet returns to rest " + elapsed.ElapsedMilliseconds + " ms after the last key press");
@@ -460,7 +504,7 @@ namespace Xiaohei
                     editor.Activate();
                     field.Focus();
                     CheckMouseFeedback(actor);
-                    Check(actor.Pose != PetPose.Typing && Workbench(actor) == null, "mouse movement, button and wheel activity alone keep the keyboard hidden");
+                    Check(Showing(actor, false, true), "mouse movement, button and wheel activity alone show only the mouse");
                     Check(GetActiveWindow() == editorHandle && field.IsKeyboardFocused && !pet.IsActive,
                         "pointer feedback preserves the editor's focus and active window");
                     CheckInputReset(pet, actor);

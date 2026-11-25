@@ -47,6 +47,8 @@ namespace Xiaohei
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(new Point(402, 418), FrameworkPropertyMetadataOptions.AffectsRender));
             private static readonly DependencyProperty MouseReach = DependencyProperty.Register("MouseReach", typeof(double),
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
+            private static readonly DependencyProperty MouseOffsetX = DependencyProperty.Register("MouseOffsetX", typeof(double),
+                typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
             private static readonly DependencyProperty WheelFlash = DependencyProperty.Register("WheelFlash", typeof(double),
                 typeof(TypingKeyboard), new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
             private static readonly DependencyProperty ClickFlash = DependencyProperty.Register("ClickFlash", typeof(double),
@@ -54,6 +56,7 @@ namespace Xiaohei
             private static readonly DoubleAnimationUsingKeyFrames Stroke = Pulse(false), FastStroke = Pulse(true);
 
             private readonly bool motion;
+            private readonly Canvas seatedLeftPaw = new Canvas { Visibility = Visibility.Hidden };
             private readonly Border hint;
             private readonly TextBlock letter;
             private readonly TranslateTransform hintLift = new TranslateTransform();
@@ -67,10 +70,13 @@ namespace Xiaohei
             private string heldKey;
             private DependencyProperty heldDepth;
             internal bool IsKeyHeld { get { return heldKey != null; } }
+            internal bool KeyboardVisible { get; private set; }
+            internal bool MouseVisible { get; private set; }
             internal double StrikeSide { get; private set; }
             internal TypingKeyboard(bool motion)
             {
                 this.motion = motion;
+                KeyboardVisible = MouseVisible = true;
                 Width = 640;
                 Height = 505;
                 IsHitTestVisible = false;
@@ -80,6 +86,8 @@ namespace Xiaohei
                     BorderThickness = new Thickness(4, 4, 4, 7), CornerRadius = new CornerRadius(17),
                     RenderTransform = hintLift,
                     Padding = new Thickness(6, 0, 6, 2), Child = new Viewbox { Stretch = Stretch.Uniform, Child = letter } };
+                DrawSeatedLeftPaw(seatedLeftPaw);
+                Children.Add(seatedLeftPaw);
                 Children.Add(hint);
             }
 
@@ -172,7 +180,7 @@ namespace Xiaohei
 
             internal void Press(string key, bool animateStroke)
             {
-                if (heldKey != null && heldKey == key) return;
+                if (!KeyboardVisible || (heldKey != null && heldKey == key)) return;
                 Release(heldKey);
                 Keycap cap = null;
                 if (key != null && !Keys.TryGetValue(key, out cap))
@@ -288,6 +296,7 @@ namespace Xiaohei
 
             internal void Mouse(double x, double y, int heldButtons, int wheel)
             {
+                if (!MouseVisible) return;
                 mouse = new Point(601 + 8 * Math.Max(-1, Math.Min(1, x)), 466 + 7 * Math.Max(-1, Math.Min(1, y)));
                 int pressed = heldButtons & ~mouseButtons & 7;
                 mouseButtons = heldButtons & 7;
@@ -325,33 +334,61 @@ namespace Xiaohei
                 }
                 else if (!motion) SetDepth(WheelFlash, 0);
                 StrikeSide = 1;
-                if (!IsKeyHeld) litKey = null;
-                letter.Text = "";
-                hint.Visibility = Visibility.Hidden;
-                hintLift.BeginAnimation(TranslateTransform.YProperty, null);
                 InvalidateVisual();
             }
 
-            internal void Rest()
+            internal void SetKeyboardVisible(bool visible)
+            {
+                if (KeyboardVisible == visible) return;
+                KeyboardVisible = visible;
+                seatedLeftPaw.Visibility = visible ? Visibility.Hidden : Visibility.Visible;
+                // Without a keyboard in the way, the mouse can sit next to the cat's paw.
+                double offset = visible ? 0 : -98;
+                if (MouseVisible && mousing) AnimateTo(MouseOffsetX, offset, 120);
+                else SetDepth(MouseOffsetX, offset);
+                if (!visible) ClearKeyboard();
+                InvalidateVisual();
+            }
+
+            internal void SetMouseVisible(bool visible)
+            {
+                if (MouseVisible == visible) return;
+                MouseVisible = visible;
+                if (!visible) ClearMouse();
+                InvalidateVisual();
+            }
+
+            private void ClearKeyboard()
             {
                 heldKey = null;
                 heldDepth = null;
                 litKey = null;
+                left = anonymous = contactDrawn = false;
                 BeginAnimation(LeftAim, null);
                 BeginAnimation(RightAim, null);
                 SetDepth(LeftDepth, 0);
                 SetDepth(RightDepth, 0);
+                letter.Text = "";
+                hint.Visibility = Visibility.Hidden;
+                hintLift.BeginAnimation(TranslateTransform.YProperty, null);
+            }
+
+            private void ClearMouse()
+            {
                 SetDepth(MouseReach, 0);
                 SetDepth(WheelFlash, 0);
                 SetDepth(ClickFlash, 0);
                 mouseButtons = pulseButtons = 0;
                 mouse = new Point(601, 466);
-                mousing = mouseDown = anonymous = false;
+                mousing = mouseDown = false;
                 sinceMouse.Reset();
+            }
+
+            internal void Rest()
+            {
+                ClearKeyboard();
+                ClearMouse();
                 StrikeSide = 0;
-                letter.Text = "";
-                hint.Visibility = Visibility.Hidden;
-                hintLift.BeginAnimation(TranslateTransform.YProperty, null);
                 InvalidateVisual();
             }
 
@@ -383,15 +420,19 @@ namespace Xiaohei
             protected override void OnRender(DrawingContext dc)
             {
                 base.OnRender(dc);
-                dc.DrawDrawing(Board);
                 double leftDepth = (double)GetValue(LeftDepth), rightDepth = (double)GetValue(RightDepth);
-                double keyDepth = (double)GetValue(latestDepth);
-                if (litKey != null && keyDepth >= .94) contactDrawn = true;
-                if (litKey != null && keyDepth > .1) DrawKey(dc, litKey, Pressed, keyDepth * 2);
-                DrawMouse(dc);
-                DrawPaw(dc, true, (Point)GetValue(LeftAim), leftDepth, leftWeight);
+                if (KeyboardVisible)
+                {
+                    dc.DrawDrawing(Board);
+                    double keyDepth = (double)GetValue(latestDepth);
+                    if (litKey != null && keyDepth >= .94) contactDrawn = true;
+                    if (litKey != null && keyDepth > .1) DrawKey(dc, litKey, Pressed, keyDepth * 2);
+                }
+                var mousePosition = new Point(mouse.X + (double)GetValue(MouseOffsetX), mouse.Y);
+                if (MouseVisible) DrawMouse(dc, mousePosition);
+                if (KeyboardVisible) DrawPaw(dc, true, (Point)GetValue(LeftAim), leftDepth, leftWeight);
                 if (mousing)
-                    DrawPaw(dc, false, new Point(mouse.X + ((mouseButtons & 2) != 0 ? 4 : -8), mouse.Y + (mouseDown ? 9 : 3)),
+                    DrawPaw(dc, false, new Point(mousePosition.X + ((mouseButtons & 2) != 0 ? 4 : -8), mousePosition.Y + (mouseDown ? 9 : 3)),
                         (double)GetValue(MouseReach), mouseDown ? 1.3 : .75);
                 else DrawPaw(dc, false, (Point)GetValue(RightAim), rightDepth, rightWeight);
             }
@@ -401,9 +442,9 @@ namespace Xiaohei
             private static readonly Geometry MouseRight = Geometry.Parse("M 1,-26 Q 17,-26 21,-7 L 2,-4 Z");
             private static readonly Pen MouseLine = MakePen(ColorBrush(102, 113, 96), 2.4);
 
-            private void DrawMouse(DrawingContext dc)
+            private void DrawMouse(DrawingContext dc, Point position)
             {
-                dc.PushTransform(new TranslateTransform(mouse.X, mouse.Y));
+                dc.PushTransform(new TranslateTransform(position.X, position.Y));
                 dc.DrawGeometry(Key, Rim, MouseShell);
                 int active = mouseButtons | ((double)GetValue(ClickFlash) > .12 ? pulseButtons : 0);
                 dc.DrawGeometry((active & 1) != 0 ? Pressed : Key, MouseLine, MouseLeft);

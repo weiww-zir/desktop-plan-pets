@@ -68,9 +68,16 @@ namespace Xiaohei
             }
         }
 
-        private static PetArt.TypingKeyboard VisibleKeyboard(DependencyObject root)
+        private static PetArt.TypingKeyboard VisibleDesk(DependencyObject root)
         {
             return Descendants<PetArt.TypingKeyboard>(root).FirstOrDefault(d => d.IsVisible);
+        }
+
+        private static bool HasProps(PetActor pet, bool keyboard, bool mouse)
+        {
+            var desk = VisibleDesk(pet);
+            return desk == null ? !keyboard && !mouse :
+                desk.KeyboardVisible == keyboard && desk.MouseVisible == mouse && (keyboard || mouse);
         }
 
         private sealed class EyeFrame
@@ -157,7 +164,7 @@ namespace Xiaohei
             Wait(40);
             pet.PointerActivity(1900, 0, 0, 0);
             Wait(100);
-            Require(VisibleKeyboard(pet) == null && (!SystemParameters.ClientAreaAnimation ||
+            Require(HasProps(pet, false, true) && (!SystemParameters.ClientAreaAnimation ||
                 Field<double>(motion, "peekAge") < 1), "a fast pointer pass still animates the cat without revealing the keyboard");
             // Move the isolated test window under the pointer, keeping the system cursor untouched.
             foreach (double x in new[] { .24, .42, .60, .40, .24, .52 })
@@ -170,15 +177,17 @@ namespace Xiaohei
                 pet.PointerActivity(70, 0, 0, 0);
             }
             Wait(130);
-            Require(pointer.Petting && VisibleKeyboard(pet) == null && (!SystemParameters.ClientAreaAnimation ||
+            Require(pointer.Petting && HasProps(pet, false, true) && (!SystemParameters.ClientAreaAnimation ||
                 Field<Canvas[]>(motion, "particles").Any(p => p.Opacity > .05)), "petting the bare head produces hearts without a keyboard");
             pet.Leave();
+            Wait(900);
+            Require(HasProps(pet, false, false), "the mouse disappears once the petting stops");
             var idle = Field<DispatcherTimer>(pet, "idle");
             var normal = idle.Interval;
             idle.Interval = TimeSpan.FromMilliseconds(45);
             Wait(150);
             idle.Interval = normal;
-            Require(pet.Pose == PetPose.Nap && VisibleKeyboard(pet) == null && (!SystemParameters.ClientAreaAnimation ||
+            Require(pet.Pose == PetPose.Nap && HasProps(pet, false, false) && (!SystemParameters.ClientAreaAnimation ||
                 Field<DispatcherTimer>(pet, "frames").IsEnabled), "the bare cat can nap and run its sleeping animation");
             pet.Touch();
         }
@@ -198,23 +207,28 @@ namespace Xiaohei
                 host.Show();
                 Wait(60);
                 var frames = Field<DispatcherTimer>(pet, "frames");
-                Require(pet.Pose == PetPose.Rest && VisibleKeyboard(pet) == null, "the seated cat starts without a keyboard");
+                Require(pet.Pose == PetPose.Rest && HasProps(pet, false, false), "the seated cat starts without either input prop");
                 pet.PointerActivity(60, 0, 0, 0);
-                Require(VisibleKeyboard(pet) == null, "moving the pointer does not reveal a keyboard");
+                Require(HasProps(pet, false, true), "moving the pointer shows only the mouse");
+                pet.ResetTransientInput();
                 pet.PointerActivity(0, 0, 1, 0);
-                Require(VisibleKeyboard(pet) == null, "holding the mouse button does not reveal a keyboard");
+                Require(HasProps(pet, false, true), "clicking from rest brings up only the mouse");
+                Wait(910);
+                Require(HasProps(pet, false, true), "the mouse remains visible throughout a long press");
                 pet.PointerActivity(0, 0, 8, 0);
-                Require(VisibleKeyboard(pet) == null, "releasing the mouse button does not reveal a keyboard");
+                Require(HasProps(pet, false, true), "releasing the mouse starts its own grace period");
+                pet.ResetTransientInput();
                 pet.PointerActivity(0, 0, 0, -120);
-                Require(pet.Pose != PetPose.Typing && VisibleKeyboard(pet) == null, "scrolling alone does not open a keyboard");
+                Require(HasProps(pet, false, true), "scrolling from rest shows only the mouse");
+                pet.ResetTransientInput();
                 pet.Enter();
                 Wait(520);
-                Require(pet.Pose == PetPose.Tilt && VisibleKeyboard(pet) == null, "hovering tilts the cat without adding a keyboard");
+                Require(pet.Pose == PetPose.Tilt && HasProps(pet, false, false), "hovering in place tilts the cat without either prop");
                 var body = Field<PetArt.CompanionMotion>(pet, "companion");
                 double mouseHeat = Field<double>(body, "heat");
                 pet.TapKeyboard("Enter", false, true);
-                var desk = VisibleKeyboard(pet);
-                Require(desk != null && desk.IsKeyHeld && desk.StrikeSide == 1, "physical key-down brings out the keyboard and the right paw holds Enter");
+                var desk = VisibleDesk(pet);
+                Require(HasProps(pet, true, false) && desk.IsKeyHeld && desk.StrikeSide == 1, "a key alone brings out only the keyboard and the right paw holds Enter");
                 Require(Math.Abs(mouseHeat - Field<double>(body, "heat")) < .00001, "a keystroke does not trigger the whole-body mouse reaction");
                 var groom = Field<Canvas>(body, "lifted");
                 bool groomed = false;
@@ -227,38 +241,48 @@ namespace Xiaohei
                 pet.PointerActivity(0, 0, 1, 0);
                 pet.PointerActivity(0, 0, 0, 120);
                 Wait(900);
-                Require(pet.Pose == PetPose.Typing && desk.IsKeyHeld && VisibleKeyboard(pet) == desk, "a held key survives the normal pause while using the mouse");
+                Require(HasProps(pet, true, true) && desk.IsKeyHeld && VisibleDesk(pet) == desk, "both props remain visible while a key and a mouse button are held");
                 pet.ReleaseKeyboard("A");
                 Require(desk.IsKeyHeld, "releasing another key does not lift the paw");
                 pet.ReleaseKeyboard("Enter");
-                Wait(290);
+                Wait(210);
                 pet.PointerActivity(90, 0, 0, 0);
-                Wait(350);
+                Require(HasProps(pet, true, true) && !desk.IsKeyHeld, "both props remain visible during the keyboard's brief pause");
+                Wait(440);
                 pet.PointerActivity(0, 0, 0, -120);
-                Require(VisibleKeyboard(pet) == desk && !desk.IsKeyHeld, "key-up leaves the keyboard visible during its brief pause");
                 Wait(330);
-                Require(pet.Pose == PetPose.Rest && VisibleKeyboard(pet) == null && Field<int>(pet, "heldButtons") != 0,
+                Require(HasProps(pet, false, true) && Field<int>(pet, "heldButtons") != 0,
                     "pointer motion, scrolling and holding a mouse button do not extend the keyboard deadline");
                 pet.PointerActivity(0, 0, 8, 0);
-                pet.PointerActivity(0, 0, 0, -120);
-                Require(VisibleKeyboard(pet) == null, "a late mouse release and scroll do not reopen the keyboard");
+                Wait(340);
+                pet.TapKeyboard("A", false, true);
+                Require(HasProps(pet, true, true), "a new key can join the visible mouse");
+                Wait(590);
+                Require(HasProps(pet, true, false) && desk.IsKeyHeld, "holding the key does not postpone the mouse's release deadline");
+                pet.PointerActivity(0, 0, 8, 0);
+                Require(HasProps(pet, true, false), "a stray mouse release does not reveal the mouse");
+                pet.PointerActivity(0, 0, 0, 120);
+                pet.EndTyping();
+                Require(HasProps(pet, false, true) && !desk.IsKeyHeld, "ending keyboard feedback leaves an active mouse on screen");
+                pet.ResetTransientInput();
                 CompanionWithoutKeyboard(host, pet);
-                pet.PointerActivity(0, 0, 1, 0);
                 // Touch woke the nap through its normal stretch. Let that independent action finish first.
                 Wait(1240);
-                pet.TapKeyboard("Ctrl", false, true);
-                desk = VisibleKeyboard(pet);
-                Require(desk != null && desk.IsKeyHeld, "a fresh physical key opens the keyboard again");
+                pet.PointerActivity(0, 0, 1, 0);
+                pet.TapKeyboard("P", false, true);
+                desk = VisibleDesk(pet);
+                Require(HasProps(pet, true, true) && desk.IsKeyHeld && desk.StrikeSide == -1, "a fresh key uses the free paw beside an already-held mouse");
                 pet.ResetTransientInput();
-                Require(pet.Pose == PetPose.Rest && VisibleKeyboard(pet) == null && Field<int>(pet, "heldButtons") == 0,
+                Require(pet.Pose == PetPose.Rest && HasProps(pet, false, false) && Field<int>(pet, "heldButtons") == 0,
                     "a device or session change clears a missing key and mouse release");
                 pet.SetSessionActive(false);
                 pet.TapKeyboard("B");
-                Require(pet.Pose == PetPose.Rest && !frames.IsEnabled && !Field<DispatcherTimer>(pet, "tailTimer").IsEnabled,
+                pet.PointerActivity(0, 0, 0, -120);
+                Require(HasProps(pet, false, false) && pet.Pose == PetPose.Rest && !frames.IsEnabled && !Field<DispatcherTimer>(pet, "tailTimer").IsEnabled,
                     "the locked session stops rendering and ignores input");
                 pet.SetSessionActive(true);
                 pet.TapKeyboard("C");
-                Require(pet.Pose == PetPose.Typing, "the unlocked session accepts fresh input");
+                Require(HasProps(pet, true, false), "the unlocked session accepts fresh input");
                 host.Close();
                 Wait(45);
                 Require(!frames.IsEnabled, "closing the pet stops the body animation clock");
