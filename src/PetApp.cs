@@ -144,6 +144,15 @@ namespace Xiaohei
             var spirits = new MenuItem { Header = "白色小精灵围绕" };
             spirits.Click += delegate { actor.WatchSpirits(); };
             menu.Items.Add(spirits);
+            var hide = new MenuItem { Header = "隐藏小黑" };
+            hide.Click += delegate
+            {
+                if (planner != null && planner.OwnedWindows.Cast<Window>().Any(w => w.IsVisible)) return;
+                if (planner != null && planner.IsVisible) planner.Hide();
+                ShowInTaskbar = true;
+                WindowState = WindowState.Minimized;
+            };
+            menu.Items.Add(hide);
             var exit = new MenuItem { Header = "退出小黑" };
             exit.Click += delegate { Close(); };
             menu.Items.Add(exit);
@@ -157,7 +166,19 @@ namespace Xiaohei
                 if (WTSRegisterSessionNotification(source.Handle, 0)) sessionWindow = source.Handle;
                 RestoreLocation();
             };
-            IsVisibleChanged += delegate { if (!IsVisible && input != null) input.Reset(); };
+            IsVisibleChanged += delegate { UpdateInputActivity(); };
+            StateChanged += delegate
+            {
+                UpdateInputActivity();
+                if (WindowState != WindowState.Normal || !ShowInTaskbar) return;
+                // Let the shell finish restoring the window before removing its taskbar button.
+                Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    if (!IsVisible || WindowState != WindowState.Normal || !ShowInTaskbar) return;
+                    ShowInTaskbar = false;
+                    PlacePet(new Point(Left, Top), WorkingArea(Forms.Screen.FromHandle(new WindowInteropHelper(this).Handle)));
+                }));
+            };
             previousReminderTime = store.Now;
             store.Changed += UpdateBadge;
             reminderTimer.Tick += delegate { RefreshReminders(); };
@@ -252,6 +273,7 @@ namespace Xiaohei
             var reset = new MenuItem { Header = "把小黑移回主屏幕" };
             reset.Click += delegate
             {
+                RestoreIfMinimized();
                 PlaceAtCorner(WorkingArea(Forms.Screen.PrimaryScreen));
                 SavePosition();
             };
@@ -311,10 +333,26 @@ namespace Xiaohei
             Top = point.Y;
         }
 
+        private bool InputActive
+        {
+            get { return IsVisible && WindowState != WindowState.Minimized && !sessionLocked && !sessionDisconnected && !suspended; }
+        }
+
+        private void UpdateInputActivity()
+        {
+            bool active = InputActive;
+            if (!active && input != null) input.Reset();
+            actor.SetSessionActive(active);
+        }
+
+        private void RestoreIfMinimized()
+        {
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        }
+
         private IntPtr OnDisplayMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            if (message == KeyboardActivity.InputMessage && input != null && IsVisible &&
-                !sessionLocked && !sessionDisconnected && !suspended)
+            if (message == KeyboardActivity.InputMessage && input != null && InputActive)
             {
                 input.Receive(lParam, !store.HideKeyLabels);
                 // Leave the message unhandled so Windows can clean up foreground raw input.
@@ -335,12 +373,7 @@ namespace Xiaohei
                 }
                 else if (reason == 4) suspended = true;
                 else if (reason == 7 || reason == 18) suspended = false;
-                if (sessionLocked || sessionDisconnected || suspended)
-                {
-                    if (input != null) input.Reset();
-                    actor.SetSessionActive(false);
-                }
-                else actor.SetSessionActive(true);
+                UpdateInputActivity();
             }
             if (message == wmInputDeviceChange && reason == 2 && input != null) input.Reset();
             if (message == wmTimeChange || (message == wmPowerBroadcast && (wParam.ToInt64() == 7 || wParam.ToInt64() == 18)))
@@ -349,7 +382,8 @@ namespace Xiaohei
             {
                 Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(delegate
                 {
-                    if (IsLoaded) PlacePet(new Point(Left, Top), WorkingArea(Forms.Screen.FromHandle(hwnd)));
+                    if (IsLoaded && WindowState == WindowState.Normal)
+                        PlacePet(new Point(Left, Top), WorkingArea(Forms.Screen.FromHandle(hwnd)));
                 }));
             }
             return IntPtr.Zero;
@@ -359,6 +393,7 @@ namespace Xiaohei
         {
             double width = Fit(Math.Round(desired), 50, 240);
             if (width == store.PetWidth) return;
+            RestoreIfMinimized();
             var screen = Forms.Screen.FromHandle(new WindowInteropHelper(this).Handle);
             var area = WorkingArea(screen);
             var previous = new Rect(Left, Top, Width, Height);
@@ -472,7 +507,7 @@ namespace Xiaohei
 
         private void KeepClear(Window window, bool resizing = false)
         {
-            if (arrangingWindows || window == null || !window.IsVisible ||
+            if (arrangingWindows || WindowState == WindowState.Minimized || window == null || !window.IsVisible ||
                 window.WindowState == WindowState.Minimized) return;
             var pet = new Rect(Left, Top, Width, Height);
             var bounds = new Rect(window.Left, window.Top, window.Width, window.Height);
@@ -535,6 +570,7 @@ namespace Xiaohei
 
         internal void ShowPlanner()
         {
+            RestoreIfMinimized();
             RefreshReminders();
             actor.Meow();
             if (planner == null)
